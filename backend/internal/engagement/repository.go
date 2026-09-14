@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -173,12 +174,12 @@ func readRelationState(tx *gorm.DB, record any, userID, videoID uint64, counter 
 }
 
 func (r *gormRepository) CreateComment(ctx context.Context, userID, videoID uint64, content string) (*Comment, error) {
-	var created Comment
+	// 落库前再次裁剪：仓储是写入边界，任何调用方传进来的首尾空白都不应被持久化。
+	created := Comment{VideoID: videoID, UserID: userID, Content: strings.TrimSpace(content)}
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := ensureEngageableVideo(tx, videoID); err != nil {
 			return err
 		}
-		created = Comment{VideoID: videoID, UserID: userID, Content: content}
 		if err := tx.Create(&created).Error; err != nil {
 			return fmt.Errorf("create comment: %w", err)
 		}
@@ -250,6 +251,11 @@ func (r *gormRepository) DeleteComment(ctx context.Context, userID, commentID ui
 }
 
 func (r *gormRepository) RecordWatch(ctx context.Context, userID, videoID, progressMS, durationMS uint64) error {
+	// 先于写入拒绝越界进度：否则会撞上 chk_watch_histories_progress 约束，把原始
+	// SQL 错误抛给调用方，而不是可映射的 ErrProgressInvalid。
+	if durationMS != 0 && progressMS > durationMS {
+		return ErrProgressInvalid
+	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := ensureEngageableVideo(tx, videoID); err != nil {
 			return err
