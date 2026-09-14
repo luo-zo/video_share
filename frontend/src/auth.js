@@ -206,6 +206,11 @@ export function createAuthClient({ fetchImpl = globalThis.fetch, now = Date.now,
       }
     },
 
+    // 公开读取与受保护请求共用响应解析和错误映射，但不要求会话，也不发送 Bearer 令牌。
+    async requestPublic(path, options = {}) {
+      return request(path, options);
+    },
+
     getSession() {
       const current = activeSession();
       return current ? { user: current.user, expiresAt: current.expiresAt } : null;

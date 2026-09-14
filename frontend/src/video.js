@@ -36,6 +36,34 @@ export function validateVideoSubmission(input = {}) {
   return { values, errors, valid: Object.keys(errors).length === 0 };
 }
 
+// 作者的部分更新：只接受显式提供的字段，未提供的字段保持原值。
+export function validateVideoPatch(input = {}) {
+  const values = {};
+  const errors = {};
+  if (input.title !== undefined) {
+    const title = text(input.title).trim();
+    if (Array.from(title).length < 1 || Array.from(title).length > 100) {
+      errors.title = '标题需为 1–100 个字符。';
+    } else {
+      values.title = title;
+    }
+  }
+  if (input.description !== undefined) {
+    const description = text(input.description).trim();
+    if (Array.from(description).length > 2000) errors.description = '简介不能超过 2000 个字符。';
+    else values.description = description;
+  }
+  if (input.visibility !== undefined) {
+    const visibility = text(input.visibility);
+    if (!['public', 'private'].includes(visibility)) errors.visibility = '可见性只能是 public 或 private。';
+    else values.visibility = visibility;
+  }
+  if (Object.keys(values).length === 0 && Object.keys(errors).length === 0) {
+    errors.title = '请至少提供一个要修改的字段。';
+  }
+  return { values, errors, valid: Object.keys(errors).length === 0 };
+}
+
 function positiveInteger(value, fallback) {
   const number = Number(value);
   return Number.isInteger(number) && number > 0 ? number : fallback;
@@ -64,7 +92,8 @@ export function createVideoClient({
   sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   now = Date.now,
 } = {}) {
-  if (!authClient || typeof authClient.requestWithSession !== 'function') {
+  if (!authClient || typeof authClient.requestWithSession !== 'function'
+      || typeof authClient.requestPublic !== 'function') {
     throw new TypeError('createVideoClient requires an auth client');
   }
 
@@ -74,6 +103,17 @@ export function createVideoClient({
       page_size: String(positiveInteger(pageSize, 12)),
     });
     return `${path}?${query}`;
+  };
+
+  const discoveryPath = ({ query, sort, page, pageSize } = {}) => {
+    const params = new URLSearchParams();
+    const keyword = text(query).trim();
+    if (keyword) params.set('q', keyword);
+    const order = text(sort);
+    if (order) params.set('sort', order);
+    params.set('page', String(positiveInteger(page, 1)));
+    params.set('page_size', String(positiveInteger(pageSize, 12)));
+    return `/videos?${params}`;
   };
 
   const checkedID = (id) => {
@@ -88,12 +128,12 @@ export function createVideoClient({
   );
 
   return {
-    async listVideos({ page = 1, pageSize = 12 } = {}) {
-      return listFrom(await authClient.requestWithSession(pagePath('/videos', page, pageSize)));
+    async listVideos({ query, sort, page = 1, pageSize = 12 } = {}) {
+      return listFrom(await authClient.requestPublic(discoveryPath({ query, sort, page, pageSize })));
     },
 
     async getVideo(id) {
-      return videoFrom(await authClient.requestWithSession(`/videos/${checkedID(id)}`));
+      return videoFrom(await authClient.requestPublic(`/videos/${checkedID(id)}`));
     },
 
     async listMyVideos({ page = 1, pageSize = 12 } = {}) {
@@ -101,6 +141,26 @@ export function createVideoClient({
     },
 
     getMyVideo,
+
+    async updateVideo(id, input) {
+      const validation = validateVideoPatch(input);
+      if (!validation.valid) {
+        throw new VideoError('请检查要修改的内容。', {
+          code: 'INVALID_PARAMETER',
+          fieldErrors: validation.errors,
+        });
+      }
+      return videoFrom(await authClient.requestWithSession(`/users/me/videos/${checkedID(id)}`, {
+        method: 'PATCH',
+        body: validation.values,
+      }));
+    },
+
+    async deleteVideo(id) {
+      return videoFrom(await authClient.requestWithSession(`/users/me/videos/${checkedID(id)}`, {
+        method: 'DELETE',
+      }));
+    },
 
     async waitUntilProcessed(id, {
       intervalMs = 2500,

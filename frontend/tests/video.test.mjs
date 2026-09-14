@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { AuthError, createAuthClient } from '../src/auth.js';
-import { VideoError, createVideoClient, validateVideoSubmission } from '../src/video.js';
+import { VideoError, createVideoClient, validateVideoPatch, validateVideoSubmission } from '../src/video.js';
 
 const jsonResponse = (data, status = 200) => ({
   ok: status >= 200 && status < 300,
@@ -41,7 +41,38 @@ test('validates a title and an MP4 file before upload', () => {
   }
 });
 
-test('lists discovery, public detail and current-user video detail with bearer session requests', async () => {
+test('searches public discovery and public detail without a session token', async () => {
+  const queue = [];
+  const calls = [];
+  const apiFetch = async (url, options) => {
+    calls.push({ url, options });
+    assert.ok(queue.length, `Unexpected request: ${url}`);
+    return queue.shift();
+  };
+  const auth = createAuthClient({ fetchImpl: apiFetch });
+  const video = createVideoClient({ authClient: auth, fetchImpl: apiFetch });
+  queue.push(
+    jsonResponse({ data: { items: [{ id: 1, title: '第一帧', status: 'ready', author: { id: 7, nickname: '小猫' } }], page: 2, page_size: 12, total: 13 } }),
+    jsonResponse({ data: { id: 1, title: '第一帧', status: 'ready', play_url: '/media/1.mp4', play_type: 'mp4', viewer_state: { liked: true, favorited: false, following_author: true } } }),
+    jsonResponse({ data: { items: [], page: 1, page_size: 12, total: 0 } }),
+  );
+
+  const page = await video.listVideos({ query: '猫', sort: 'popular', page: 2, pageSize: 12 });
+  assert.equal(page.total, 13);
+  assert.equal((await video.getVideo(1)).play_url, '/media/1.mp4');
+  assert.deepEqual((await video.listVideos()).items, []);
+
+  assert.deepEqual(calls.map(({ url }) => url), [
+    '/api/v1/videos?q=%E7%8C%AB&sort=popular&page=2&page_size=12',
+    '/api/v1/videos/1',
+    '/api/v1/videos?page=1&page_size=12',
+  ]);
+  for (const { options } of calls) {
+    assert.equal(options.headers.Authorization, undefined);
+  }
+});
+
+test('lists and reads current-user video detail with bearer session requests', async () => {
   const queue = [];
   const calls = [];
   const apiFetch = async (url, options) => {
@@ -52,26 +83,78 @@ test('lists discovery, public detail and current-user video detail with bearer s
   const { auth, video } = authenticatedClient(apiFetch);
   await signIn(auth, queue);
   queue.push(
-    jsonResponse({ data: { items: [{ id: 1, title: '第一帧', status: 'ready', author: { id: 7, nickname: '小猫' } }], page: 2, page_size: 6, total: 7 } }),
-    jsonResponse({ data: { id: 1, title: '第一帧', status: 'ready', play_url: '/media/1.mp4', play_type: 'mp4' } }),
     jsonResponse({ data: { items: [], page: 1, page_size: 12, total: 0 } }),
     jsonResponse({ data: { id: 2, title: '转码中', status: 'processing', processing_progress: 75 } }),
   );
 
-  assert.equal((await video.listVideos({ page: 2, pageSize: 6 })).items[0].title, '第一帧');
-  assert.equal((await video.getVideo(1)).play_url, '/media/1.mp4');
   assert.deepEqual((await video.listMyVideos()).items, []);
   assert.equal((await video.getMyVideo(2)).processing_progress, 75);
 
   assert.deepEqual(calls.slice(2).map(({ url }) => url), [
-    '/api/v1/videos?page=2&page_size=6',
-    '/api/v1/videos/1',
     '/api/v1/users/me/videos?page=1&page_size=12',
     '/api/v1/users/me/videos/2',
   ]);
   for (const { options } of calls.slice(2)) {
     assert.equal(options.headers.Authorization, 'Bearer session-token');
   }
+});
+
+test('validates an owner patch before sending it', () => {
+  assert.equal(validateVideoPatch({ title: '  新标题  ', visibility: 'private' }).valid, true);
+  assert.deepEqual(validateVideoPatch({ title: '  新标题  ' }).values, { title: '新标题' });
+  assert.equal(validateVideoPatch({}).valid, false);
+  assert.equal(validateVideoPatch({ visibility: 'friends' }).valid, false);
+  assert.equal(validateVideoPatch({ title: 'x'.repeat(101) }).valid, false);
+  assert.equal(validateVideoPatch({ description: 'x'.repeat(2001) }).valid, false);
+});
+
+test('updates and deletes an owned video with the session token', async () => {
+  const queue = [];
+  const calls = [];
+  const apiFetch = async (url, options) => {
+    calls.push({ url, options });
+    assert.ok(queue.length, `Unexpected request: ${url}`);
+    return queue.shift();
+  };
+  const { auth, video } = authenticatedClient(apiFetch);
+  await signIn(auth, queue);
+  queue.push(
+    jsonResponse({ data: { id: 5, title: '新标题', description: '改了简介', visibility: 'private' } }),
+    jsonResponse({ data: { id: 5 } }),
+  );
+
+  const updated = await video.updateVideo(5, { title: '  新标题  ', description: '改了简介', visibility: 'private' });
+  assert.equal(updated.title, '新标题');
+  assert.equal(updated.visibility, 'private');
+  assert.equal((await video.deleteVideo(5)).id, 5);
+
+  assert.deepEqual(calls.slice(2).map(({ url, options }) => `${options.method} ${url}`), [
+    'PATCH /api/v1/users/me/videos/5',
+    'DELETE /api/v1/users/me/videos/5',
+  ]);
+  assert.deepEqual(JSON.parse(calls[2].options.body), {
+    title: '新标题', description: '改了简介', visibility: 'private',
+  });
+  assert.equal(calls[2].options.headers.Authorization, 'Bearer session-token');
+  assert.equal(calls[3].options.headers.Authorization, 'Bearer session-token');
+});
+
+test('rejects an empty owner patch without contacting the API', async () => {
+  const queue = [];
+  const calls = [];
+  const apiFetch = async (url, options) => {
+    calls.push({ url, options });
+    return queue.shift();
+  };
+  const { auth, video } = authenticatedClient(apiFetch);
+  await signIn(auth, queue);
+
+  await assert.rejects(video.updateVideo(5, {}), (error) => {
+    assert.ok(error instanceof VideoError);
+    assert.equal(error.code, 'INVALID_PARAMETER');
+    return true;
+  });
+  assert.equal(calls.length, 2);
 });
 
 test('uploads in create, direct PUT and complete order without sending bearer token to upload URL', async () => {
@@ -172,7 +255,7 @@ test('an API 401 clears the in-memory auth session', async () => {
   await signIn(auth, queue);
   queue.push(jsonResponse({ error: { code: 'INVALID_TOKEN' } }, 401));
 
-  await assert.rejects(video.listVideos(), (error) => {
+  await assert.rejects(video.listMyVideos(), (error) => {
     assert.ok(error instanceof AuthError);
     assert.equal(error.status, 401);
     return true;

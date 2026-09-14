@@ -41,8 +41,13 @@ async function listen(server, t) {
 }
 
 function rawRequest(origin, route, options = {}) {
+  // Node 把 DELETE 当作无请求体的方法，不会自动补 Content-Length；若不显式声明，
+  // 请求体会以未分帧的裸字节发出，被服务端解析器直接以 400 拒绝。
+  const headers = options.body === undefined
+    ? options.headers
+    : { ...options.headers, 'Content-Length': Buffer.byteLength(options.body) };
   return new Promise((resolve, reject) => {
-    const outgoing = http.request(origin, { path: route, ...options }, (incoming) => {
+    const outgoing = http.request(origin, { path: route, ...options, headers }, (incoming) => {
       const chunks = [];
       incoming.on('data', (chunk) => chunks.push(chunk));
       incoming.on('end', () => resolve({
@@ -139,6 +144,107 @@ test('proxies allowlisted video routes, methods, auth and pagination queries', a
   assert.equal((await rawRequest(origin, '/api/v1/videos/7', { method: 'DELETE' })).status, 405);
   assert.equal((await rawRequest(origin, '/api/v1/videos/not-a-number')).status, 404);
   assert.equal((await rawRequest(origin, '/api/v1/videos/7/hls/../secret.ts')).status, 404);
+});
+
+test('proxies community routes with their exact methods and bearer tokens', async (t) => {
+  const seen = [];
+  const apiTarget = await listen(http.createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    seen.push({
+      method: request.method,
+      url: request.url,
+      auth: request.headers.authorization,
+      body: Buffer.concat(chunks).toString(),
+    });
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end('{"data":{}}');
+  }), t);
+  const origin = await listen(createFrontendServer({ rootDir, apiTarget }), t);
+
+  const json = (method, route) => rawRequest(origin, route, {
+    method,
+    headers: { 'Content-Type': 'application/json', Origin: origin, Authorization: 'Bearer test-token' },
+    body: '{}',
+  });
+
+  assert.equal((await rawRequest(origin, '/api/v1/videos/9/comments?page=1')).status, 200);
+  assert.equal((await json('POST', '/api/v1/videos/9/comments')).status, 200);
+  assert.equal((await json('DELETE', '/api/v1/comments/11')).status, 200);
+  assert.equal((await json('PUT', '/api/v1/videos/9/like')).status, 200);
+  assert.equal((await json('DELETE', '/api/v1/videos/9/like')).status, 200);
+  assert.equal((await json('PUT', '/api/v1/videos/9/favorite')).status, 200);
+  assert.equal((await json('DELETE', '/api/v1/videos/9/favorite')).status, 200);
+  assert.equal((await json('POST', '/api/v1/videos/9/watch')).status, 200);
+  assert.equal((await json('PATCH', '/api/v1/users/me/videos/5')).status, 200);
+  assert.equal((await json('DELETE', '/api/v1/users/me/videos/5')).status, 200);
+  const authed = { headers: { Authorization: 'Bearer test-token' } };
+  assert.equal((await rawRequest(origin, '/api/v1/users/me/favorites?page=2', authed)).status, 200);
+  assert.equal((await rawRequest(origin, '/api/v1/users/me/history', authed)).status, 200);
+  assert.equal((await rawRequest(origin, '/api/v1/users/me/follows', authed)).status, 200);
+  assert.equal((await json('PUT', '/api/v1/users/4/follow')).status, 200);
+  assert.equal((await json('DELETE', '/api/v1/users/4/follow')).status, 200);
+
+  assert.deepEqual(seen.map(({ method, url }) => `${method} ${url}`), [
+    'GET /api/v1/videos/9/comments?page=1',
+    'POST /api/v1/videos/9/comments',
+    'DELETE /api/v1/comments/11',
+    'PUT /api/v1/videos/9/like',
+    'DELETE /api/v1/videos/9/like',
+    'PUT /api/v1/videos/9/favorite',
+    'DELETE /api/v1/videos/9/favorite',
+    'POST /api/v1/videos/9/watch',
+    'PATCH /api/v1/users/me/videos/5',
+    'DELETE /api/v1/users/me/videos/5',
+    'GET /api/v1/users/me/favorites?page=2',
+    'GET /api/v1/users/me/history',
+    'GET /api/v1/users/me/follows',
+    'PUT /api/v1/users/4/follow',
+    'DELETE /api/v1/users/4/follow',
+  ]);
+  for (const request of seen.slice(1)) {
+    assert.equal(request.auth, 'Bearer test-token');
+    // 写请求必须原样转发请求体，个人列表这类 GET 则不能带上任何请求体。
+    assert.equal(request.body, request.method === 'GET' ? '' : '{}');
+  }
+
+  assert.equal((await rawRequest(origin, '/api/v1/comments/11')).status, 405);
+  assert.equal((await rawRequest(origin, '/api/v1/videos/9/watch')).status, 405);
+  assert.equal((await rawRequest(origin, '/api/v1/users/me/follows', { method: 'POST' })).status, 405);
+  assert.equal((await rawRequest(origin, '/api/v1/users/4/follow', { method: 'GET' })).status, 405);
+  assert.equal((await rawRequest(origin, '/api/v1/comments/0')).status, 404);
+});
+
+test('applies origin and JSON content-type checks to every body-carrying method', async (t) => {
+  let upstreamCalls = 0;
+  const apiTarget = await listen(http.createServer((request, response) => {
+    upstreamCalls += 1;
+    response.end('{}');
+  }), t);
+  const origin = await listen(createFrontendServer({ rootDir, apiTarget }), t);
+
+  const crossOrigin = await rawRequest(origin, '/api/v1/videos/9/like', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Origin: 'https://unrelated.example' },
+    body: '{}',
+  });
+  assert.equal(crossOrigin.status, 403);
+  assert.equal(JSON.parse(crossOrigin.body).error.code, 'ORIGIN_REJECTED');
+
+  assert.equal((await rawRequest(origin, '/api/v1/videos/9/like', {
+    method: 'PUT', headers: { 'Content-Type': 'text/plain', Origin: origin }, body: '{}',
+  })).status, 415);
+  assert.equal((await rawRequest(origin, '/api/v1/users/me/videos/5', {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json', Origin: origin },
+    body: 'x'.repeat(32 * 1024 + 1),
+  })).status, 413);
+  assert.equal((await rawRequest(origin, '/api/v1/users/4/follow', {
+    method: 'DELETE', headers: { 'Content-Type': 'application/json', Origin: origin }, body: '{}',
+  })).status, 200);
+  assert.equal((await rawRequest(origin, '/api/v1/users/4/follow', {
+    method: 'DELETE', headers: { Origin: origin },
+  })).status, 200);
+  assert.equal(upstreamCalls, 2);
 });
 
 test('forwards only MinIO redirects used by HLS segments and covers', async (t) => {

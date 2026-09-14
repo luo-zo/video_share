@@ -15,6 +15,7 @@ const staticFiles = new Map([
   ['/src/auth.js', ['src/auth.js', 'text/javascript; charset=utf-8']],
   ['/src/cat.js', ['src/cat.js', 'text/javascript; charset=utf-8']],
   ['/src/video.js', ['src/video.js', 'text/javascript; charset=utf-8']],
+  ['/src/community.js', ['src/community.js', 'text/javascript; charset=utf-8']],
   ['/src/player.js', ['src/player.js', 'text/javascript; charset=utf-8']],
   ['/vendor/hls.mjs', ['node_modules/hls.js/dist/hls.mjs', 'text/javascript; charset=utf-8']],
 ]);
@@ -23,21 +24,37 @@ const fixedApiRoutes = new Map([
   ['/readyz', ['GET']],
   ['/api/v1/users/me', ['GET']],
   ['/api/v1/users/me/videos', ['GET']],
+  ['/api/v1/users/me/favorites', ['GET']],
+  ['/api/v1/users/me/history', ['GET']],
+  ['/api/v1/users/me/follows', ['GET']],
   ['/api/v1/auth/login', ['POST']],
   ['/api/v1/auth/register', ['POST']],
   ['/api/v1/videos', ['GET', 'POST']],
 ]);
+// 这些方法可以携带请求体；没有请求体的删除调用仍然直接转发。
+const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 function methodsForAPIPath(route) {
   const fixed = fixedApiRoutes.get(route);
   if (fixed) return fixed;
   if (/^\/api\/v1\/videos\/[1-9]\d*$/.test(route)) return ['GET'];
-  if (/^\/api\/v1\/users\/me\/videos\/[1-9]\d*$/.test(route)) return ['GET'];
+  if (/^\/api\/v1\/users\/me\/videos\/[1-9]\d*$/.test(route)) return ['GET', 'PATCH', 'DELETE'];
+  if (/^\/api\/v1\/users\/[1-9]\d*\/follow$/.test(route)) return ['PUT', 'DELETE'];
+  if (/^\/api\/v1\/videos\/[1-9]\d*\/(?:like|favorite)$/.test(route)) return ['PUT', 'DELETE'];
+  if (/^\/api\/v1\/videos\/[1-9]\d*\/comments$/.test(route)) return ['GET', 'POST'];
+  if (/^\/api\/v1\/videos\/[1-9]\d*\/watch$/.test(route)) return ['POST'];
+  if (/^\/api\/v1\/comments\/[1-9]\d*$/.test(route)) return ['DELETE'];
   if (/^\/api\/v1\/videos\/[1-9]\d*\/cover$/.test(route)) return ['GET'];
   const hls = route.match(/^\/api\/v1\/videos\/[1-9]\d*\/hls\/(.+)$/);
   if (hls && hls[1].split('/').every((part) => part !== '.' && part !== '..' && /^[A-Za-z0-9._-]+$/.test(part))) return ['GET'];
   if (/^\/api\/v1\/videos\/[1-9]\d*\/complete$/.test(route)) return ['POST'];
   return null;
+}
+
+function hasBody(request) {
+  if (request.headers['transfer-encoding'] !== undefined) return true;
+  const length = Number(request.headers['content-length']);
+  return Number.isFinite(length) && length > 0;
 }
 
 class RequestError extends Error {
@@ -240,14 +257,16 @@ export function createFrontendServer({
         throw new RequestError(405, 'METHOD_NOT_ALLOWED', `This resource supports ${allowed}.`);
       }
       let body;
-      if (request.method === 'POST') {
+      if (WRITE_METHODS.has(request.method)) {
         if (!isLocalOrigin(request)) {
           throw new RequestError(403, 'ORIGIN_REJECTED', 'Cross-origin requests are not allowed.');
         }
-        if (!/^application\/json(?:\s*;|\s*$)/i.test(request.headers['content-type'] || '')) {
-          throw new RequestError(415, 'JSON_REQUIRED', 'Content-Type must be application/json.');
+        if (hasBody(request)) {
+          if (!/^application\/json(?:\s*;|\s*$)/i.test(request.headers['content-type'] || '')) {
+            throw new RequestError(415, 'JSON_REQUIRED', 'Content-Type must be application/json.');
+          }
+          body = await readBody(request, maxBodyBytes, timeoutMs);
         }
-        body = await readBody(request, maxBodyBytes, timeoutMs);
       }
       const upstream = await callUpstream(target, request, request.url, body, timeoutMs);
       const headers = {
