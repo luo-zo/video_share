@@ -162,3 +162,10 @@ func toVideoResponses(videos []Video) []VideoResponse {
 	}
 	return result
 }
+
+// ToVideoResponses projects loaded videos into their public response shape. It
+// is exported so other modules can reuse the projection instead of duplicating
+// the cover URL and author mapping rules.
+func ToVideoResponses(videos []Video) []VideoResponse {
+	return toVideoResponses(videos)
+}

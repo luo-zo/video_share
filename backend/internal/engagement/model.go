@@ -1,6 +1,10 @@
 package engagement
 
-import "time"
+import (
+	"time"
+
+	"video_share/internal/video"
+)
 
 type VideoStats struct {
 	VideoID       uint64    `gorm:"primaryKey"`
@@ -37,6 +41,8 @@ type Comment struct {
 	CreatedAt time.Time  `gorm:"not null"`
 	UpdatedAt time.Time  `gorm:"not null"`
 	DeletedAt *time.Time `gorm:"type:datetime(3);index"`
+
+	Author video.Author `gorm:"-"`
 }
 
 func (Comment) TableName() string { return "comments" }
