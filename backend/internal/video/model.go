@@ -59,18 +59,18 @@ type Author struct {
 
 // Stats is the public aggregate read model for one video.
 type Stats struct {
-	ViewCount     uint64
-	LikeCount     uint64
-	FavoriteCount uint64
-	CommentCount  uint64
+	ViewCount     uint64 `json:"view_count"`
+	LikeCount     uint64 `json:"like_count"`
+	FavoriteCount uint64 `json:"favorite_count"`
+	CommentCount  uint64 `json:"comment_count"`
 }
 
 // ViewerState describes relationships belonging to the current viewer. It is
 // omitted from anonymous responses.
 type ViewerState struct {
-	Liked           bool
-	Favorited       bool
-	FollowingAuthor bool
+	Liked           bool `json:"liked"`
+	Favorited       bool `json:"favorited"`
+	FollowingAuthor bool `json:"following_author"`
 }
 
 // Video is the persisted metadata for one uploaded object. ObjectKey is internal

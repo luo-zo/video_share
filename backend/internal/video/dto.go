@@ -13,6 +13,23 @@ type CreateRequest struct {
 	FileSize    int64  `json:"file_size" binding:"required"`
 }
 
+// Sort selects the public discovery ordering.
+type Sort string
+
+const (
+	SortLatest  Sort = "latest"
+	SortPopular Sort = "popular"
+)
+
+// ListQuery is the validated public discovery request. Query is already
+// trimmed and length-checked by the Service before it reaches the Repository.
+type ListQuery struct {
+	Page     int
+	PageSize int
+	Query    string
+	Sort     Sort
+}
+
 type AuthorResponse struct {
 	ID       uint64 `json:"id"`
 	Username string `json:"username"`
@@ -27,12 +44,15 @@ type VideoResponse struct {
 	Title       string          `json:"title"`
 	Description string          `json:"description"`
 	Status      string          `json:"status"`
+	Visibility  string          `json:"visibility"`
 	FileSize    int64           `json:"file_size"`
 	ContentType string          `json:"content_type"`
 	CoverURL    *string         `json:"cover_url"`
 	DurationMS  *uint64         `json:"duration_ms"`
 	Width       *uint           `json:"width"`
 	Height      *uint           `json:"height"`
+	PublishedAt *time.Time      `json:"published_at"`
+	Stats       Stats           `json:"stats"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
 	Author      *AuthorResponse `json:"author,omitempty"`
@@ -46,9 +66,10 @@ type CreateResponse struct {
 
 type DetailResponse struct {
 	VideoResponse
-	PlayURL       string `json:"play_url"`
-	PlayType      string `json:"play_type"`
-	PlayExpiresIn int64  `json:"play_expires_in"`
+	PlayURL       string       `json:"play_url"`
+	PlayType      string       `json:"play_type"`
+	PlayExpiresIn int64        `json:"play_expires_in"`
+	ViewerState   *ViewerState `json:"viewer_state,omitempty"`
 }
 
 type OwnerVideoResponse struct {
@@ -78,11 +99,14 @@ func toVideoResponse(v *Video) VideoResponse {
 		Title:       v.Title,
 		Description: v.Description,
 		Status:      v.Status.String(),
+		Visibility:  v.Visibility.String(),
 		FileSize:    v.FileSize,
 		ContentType: v.ContentType,
 		DurationMS:  v.DurationMS,
 		Width:       v.Width,
 		Height:      v.Height,
+		PublishedAt: v.PublishedAt,
+		Stats:       v.Stats,
 		CreatedAt:   v.CreatedAt,
 		UpdatedAt:   v.UpdatedAt,
 	}

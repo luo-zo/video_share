@@ -214,3 +214,26 @@ func TestHandlerMapsUnexpectedRepositoryErrorTo500(t *testing.T) {
 		t.Fatalf("response = %d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestListHandlerAcceptsSearchAndRejectsInvalidSort(t *testing.T) {
+	repo := &mockRepository{listPublicFn: func(_ context.Context, query ListQuery) ([]Video, int64, error) {
+		if query.Query != "猫" || query.Sort != SortPopular || query.Page != 2 || query.PageSize != 6 {
+			t.Fatalf("query = %+v", query)
+		}
+		return []Video{}, 0, nil
+	}}
+	h := newHandlerForTest(repo, &mockObjectStore{})
+	r := gin.New()
+	r.GET("/videos", h.List)
+	w := performRequest(r, http.MethodGet, "/videos?q=%E7%8C%AB&sort=popular&page=2&page_size=6", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("valid search status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	for _, query := range []string{"?q=" + strings.Repeat("a", 51), "?sort=unknown"} {
+		w = performRequest(r, http.MethodGet, "/videos"+query, "")
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("query %q status = %d, want 400", query, w.Code)
+		}
+	}
+}

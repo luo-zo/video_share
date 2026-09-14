@@ -23,6 +23,9 @@ type mockRepository struct {
 	markReadyFn       func(context.Context, uint64) error
 	listReadyFn       func(context.Context, int, int) ([]Video, int64, error)
 	findReadyByIDFn   func(context.Context, uint64) (*Video, error)
+	listPublicFn      func(context.Context, ListQuery) ([]Video, int64, error)
+	findPublicByIDFn  func(context.Context, uint64) (*Video, error)
+	viewerStateFn     func(context.Context, uint64, uint64, uint64) (*ViewerState, error)
 	listByUserFn      func(context.Context, uint64, int, int) ([]Video, int64, error)
 }
 
@@ -393,5 +396,73 @@ func TestPaginationValidation(t *testing.T) {
 		if _, err := svc.List(context.Background(), args[0], args[1]); !errors.Is(err, ErrPaginationInvalid) {
 			t.Fatalf("List(%d,%d) error = %v", args[0], args[1], err)
 		}
+	}
+}
+
+func (m *mockRepository) ListPublic(ctx context.Context, query ListQuery) ([]Video, int64, error) {
+	if m.listPublicFn != nil {
+		return m.listPublicFn(ctx, query)
+	}
+	if m.listReadyFn != nil {
+		return m.listReadyFn(ctx, query.Page, query.PageSize)
+	}
+	return []Video{}, 0, nil
+}
+
+func (m *mockRepository) FindPublicByID(ctx context.Context, id uint64) (*Video, error) {
+	if m.findPublicByIDFn != nil {
+		return m.findPublicByIDFn(ctx, id)
+	}
+	if m.findReadyByIDFn != nil {
+		return m.findReadyByIDFn(ctx, id)
+	}
+	return nil, ErrNotFound
+}
+
+func (m *mockRepository) ViewerState(ctx context.Context, viewerID, videoID, authorID uint64) (*ViewerState, error) {
+	if m.viewerStateFn == nil {
+		return &ViewerState{}, nil
+	}
+	return m.viewerStateFn(ctx, viewerID, videoID, authorID)
+}
+
+func TestListQueryRejectsInvalidSearchAndSort(t *testing.T) {
+	svc := newTestService(&mockRepository{}, &mockObjectStore{})
+	for _, query := range []ListQuery{
+		{Page: 1, PageSize: 12, Query: strings.Repeat("搜", 51)},
+		{Page: 1, PageSize: 12, Sort: "trending"},
+	} {
+		if _, err := svc.ListPublic(context.Background(), query); !errors.Is(err, ErrListQueryInvalid) {
+			t.Fatalf("ListPublic(%+v) error = %v, want ErrListQueryInvalid", query, err)
+		}
+	}
+}
+
+func TestEscapeLikeTreatsWildcardsAsLiteralCharacters(t *testing.T) {
+	if got, want := escapeLike(`猫!_%`, '!'), `猫!!!_!%`; got != want {
+		t.Fatalf("escapeLike = %q, want %q", got, want)
+	}
+}
+
+func TestDetailForViewerIncludesViewerStateOnlyForLoggedInViewer(t *testing.T) {
+	item := Video{ID: 42, UserID: 7, ObjectKey: "videos/7/42/source.mp4", Status: StatusReady, Visibility: VisibilityPublic}
+	repo := &mockRepository{findPublicByIDFn: func(context.Context, uint64) (*Video, error) {
+		copy := item
+		return &copy, nil
+	}}
+	repo.viewerStateFn = func(_ context.Context, viewerID, videoID, authorID uint64) (*ViewerState, error) {
+		if viewerID != 9 || videoID != 42 || authorID != 7 {
+			t.Fatalf("ViewerState args = %d/%d/%d", viewerID, videoID, authorID)
+		}
+		return &ViewerState{Liked: true, Favorited: true, FollowingAuthor: true}, nil
+	}
+	svc := newTestService(repo, &mockObjectStore{})
+	anonymous, err := svc.DetailForViewer(context.Background(), 0, 42)
+	if err != nil || anonymous.ViewerState != nil {
+		t.Fatalf("anonymous DetailForViewer = (%+v, %v)", anonymous, err)
+	}
+	viewer, err := svc.DetailForViewer(context.Background(), 9, 42)
+	if err != nil || viewer.ViewerState == nil || !viewer.ViewerState.Liked {
+		t.Fatalf("viewer DetailForViewer = (%+v, %v)", viewer, err)
 	}
 }

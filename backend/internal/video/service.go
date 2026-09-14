@@ -25,7 +25,11 @@ var (
 	ErrUploadIncomplete   = errors.New("video upload is incomplete")
 	ErrUploadMismatch     = errors.New("uploaded object does not match submission")
 	ErrStateConflict      = errors.New("video state conflict")
+	ErrListQueryInvalid   = errors.New("invalid list query")
 )
+
+// maxSearchQueryRunes bounds the discovery keyword after trimming.
+const maxSearchQueryRunes = 50
 
 type ObjectStore interface {
 	PresignPut(ctx context.Context, key, contentType string, expiry time.Duration) (string, error)
@@ -174,22 +178,69 @@ func (s *Service) List(ctx context.Context, page, pageSize int) (*ListResponse, 
 	return &ListResponse{Items: toVideoResponses(videos), Page: page, PageSize: pageSize, Total: total}, nil
 }
 
-func (s *Service) Detail(ctx context.Context, videoID uint64) (*DetailResponse, error) {
-	if videoID == 0 {
-		return nil, ErrNotFound
+// ListPublic validates and normalizes a discovery query before handing it to the
+// repository. An empty keyword is an ordinary public listing.
+func (s *Service) ListPublic(ctx context.Context, query ListQuery) (*ListResponse, error) {
+	if err := validatePagination(query.Page, query.PageSize); err != nil {
+		return nil, err
 	}
-	v, err := s.repo.FindReadyByID(ctx, videoID)
+	query.Query = strings.TrimSpace(query.Query)
+	if utf8.RuneCountInString(query.Query) > maxSearchQueryRunes {
+		return nil, ErrListQueryInvalid
+	}
+	switch query.Sort {
+	case "":
+		query.Sort = SortLatest
+	case SortLatest, SortPopular:
+	default:
+		return nil, ErrListQueryInvalid
+	}
+	videos, total, err := s.repo.ListPublic(ctx, query)
 	if err != nil {
 		return nil, err
 	}
+	return &ListResponse{Items: toVideoResponses(videos), Page: query.Page, PageSize: query.PageSize, Total: total}, nil
+}
+
+// Detail returns public playback metadata for an anonymous viewer.
+func (s *Service) Detail(ctx context.Context, videoID uint64) (*DetailResponse, error) {
+	return s.DetailForViewer(ctx, 0, videoID)
+}
+
+// DetailForViewer resolves public playback metadata and, for a logged-in
+// viewer, the relationships that viewer holds for this video.
+func (s *Service) DetailForViewer(ctx context.Context, viewerID, videoID uint64) (*DetailResponse, error) {
+	if videoID == 0 {
+		return nil, ErrNotFound
+	}
+	v, err := s.repo.FindPublicByID(ctx, videoID)
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.playbackResponse(ctx, v)
+	if err != nil {
+		return nil, err
+	}
+	if viewerID != 0 {
+		state, err := s.repo.ViewerState(ctx, viewerID, v.ID, v.UserID)
+		if err != nil {
+			return nil, err
+		}
+		result.ViewerState = state
+	}
+	return result, nil
+}
+
+func (s *Service) playbackResponse(ctx context.Context, v *Video) (*DetailResponse, error) {
 	playURL := fmt.Sprintf("/api/v1/videos/%d/hls/master.m3u8", v.ID)
 	playType := "hls"
 	playExpiresIn := int64(0)
 	if v.HLSMasterKey == nil || *v.HLSMasterKey == "" {
-		playURL, err = s.store.PresignGet(ctx, v.ObjectKey, s.playExpiry)
+		url, err := s.store.PresignGet(ctx, v.ObjectKey, s.playExpiry)
 		if err != nil {
 			return nil, fmt.Errorf("create video playback URL: %w", err)
 		}
+		playURL = url
 		playType = "mp4"
 		playExpiresIn = int64(s.playExpiry.Seconds())
 	}
@@ -199,6 +250,20 @@ func (s *Service) Detail(ctx context.Context, videoID uint64) (*DetailResponse, 
 		PlayType:      playType,
 		PlayExpiresIn: playExpiresIn,
 	}, nil
+}
+
+// escapeLike escapes the escape character, `%`, and `_` so a search keyword
+// matches literally instead of acting as a wildcard.
+func escapeLike(value string, escape rune) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	for _, r := range value {
+		if r == escape || r == '%' || r == '_' {
+			b.WriteRune(escape)
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 func (s *Service) Mine(ctx context.Context, userID uint64, page, pageSize int) (*OwnerListResponse, error) {
@@ -265,7 +330,7 @@ func (s *Service) HLSObjectURL(ctx context.Context, videoID uint64, objectPath s
 }
 
 func (s *Service) CoverURL(ctx context.Context, videoID uint64) (string, error) {
-	v, err := s.repo.FindReadyByID(ctx, videoID)
+	v, err := s.repo.FindPublicByID(ctx, videoID)
 	if err != nil {
 		return "", err
 	}
@@ -280,7 +345,7 @@ func (s *Service) CoverURL(ctx context.Context, videoID uint64) (string, error) 
 }
 
 func (s *Service) hlsObject(ctx context.Context, videoID uint64, requested string) (*Video, string, string, error) {
-	v, err := s.repo.FindReadyByID(ctx, videoID)
+	v, err := s.repo.FindPublicByID(ctx, videoID)
 	if err != nil {
 		return nil, "", "", err
 	}

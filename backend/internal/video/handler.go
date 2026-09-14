@@ -64,7 +64,12 @@ func (h *Handler) List(c *gin.Context) {
 	if !ok {
 		return
 	}
-	result, err := h.svc.List(c.Request.Context(), page, pageSize)
+	result, err := h.svc.ListPublic(c.Request.Context(), ListQuery{
+		Page:     page,
+		PageSize: pageSize,
+		Query:    c.Query("q"),
+		Sort:     Sort(c.Query("sort")),
+	})
 	if err != nil {
 		h.handleError(c, "list videos", err)
 		return
@@ -77,7 +82,8 @@ func (h *Handler) Detail(c *gin.Context) {
 	if !ok {
 		return
 	}
-	result, err := h.svc.Detail(c.Request.Context(), id)
+	viewerID := c.GetUint64(middleware.UserIDKey)
+	result, err := h.svc.DetailForViewer(c.Request.Context(), viewerID, id)
 	if err != nil {
 		h.handleError(c, "get video detail", err)
 		return
@@ -212,6 +218,8 @@ func (h *Handler) handleError(c *gin.Context, operation string, err error) {
 		response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "视频文件大小不符合要求")
 	case errors.Is(err, ErrPaginationInvalid):
 		response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "分页参数无效")
+	case errors.Is(err, ErrListQueryInvalid):
+		response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "搜索关键词过长或排序无效")
 	case errors.Is(err, ErrUploadIncomplete):
 		response.Error(c, http.StatusConflict, response.CodeUploadIncomplete, "视频文件尚未上传完成")
 	case errors.Is(err, ErrUploadMismatch):
