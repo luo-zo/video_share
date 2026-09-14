@@ -11,6 +11,8 @@ import (
 
 	"video_share/internal/config"
 	"video_share/internal/database"
+	"video_share/internal/engagement"
+	"video_share/internal/follow"
 	"video_share/internal/middleware"
 	"video_share/internal/response"
 	"video_share/internal/token"
@@ -43,6 +45,8 @@ func NewRouter(cfg *config.Config, db *gorm.DB, log *slog.Logger, tm *token.Mana
 	videoRepo := video.NewRepository(db, video.WithProcessingQueue(cfg.KafkaTranscodeTopic, uint(cfg.TranscodeMaxAttempts)))
 	videoSvc := video.NewService(videoRepo, objectStore, cfg.MaxVideoBytes, cfg.UploadExpiry, cfg.PlayExpiry)
 	videoHandler := video.NewHandler(videoSvc, log)
+	engagementHandler := engagement.NewHandler(engagement.NewService(engagement.NewRepository(db)), log)
+	followHandler := follow.NewHandler(follow.NewService(follow.NewRepository(db)), log)
 
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -50,6 +54,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB, log *slog.Logger, tm *token.Mana
 	r.GET("/readyz", readinessHandler(db, log))
 
 	rateLimiter := middleware.NewRateLimiter(cfg.RateLimitPerSecond, cfg.RateLimitBurst, 10000)
+	requireAuth := middleware.Auth(tm)
 
 	api := r.Group("/api/v1")
 	auth := api.Group("/auth")
@@ -57,16 +62,36 @@ func NewRouter(cfg *config.Config, db *gorm.DB, log *slog.Logger, tm *token.Mana
 	auth.POST("/register", rateLimiter.Middleware(), bodyLimit, userHandler.Register)
 	auth.POST("/login", rateLimiter.Middleware(), bodyLimit, userHandler.Login)
 
-	api.GET("/users/me", middleware.Auth(tm), userHandler.Me)
-	api.GET("/users/me/videos", middleware.Auth(tm), videoHandler.Mine)
-	api.GET("/users/me/videos/:id", middleware.Auth(tm), videoHandler.MineDetail)
+	api.GET("/users/me", requireAuth, userHandler.Me)
 
+	// 公开读取端点：详情页使用 OptionalAuth，匿名访问时互动状态返回 false。
 	api.GET("/videos", videoHandler.List)
 	api.GET("/videos/:id/cover", videoHandler.Cover)
 	api.GET("/videos/:id/hls/*path", videoHandler.HLS)
-	api.GET("/videos/:id", videoHandler.Detail)
-	api.POST("/videos", middleware.Auth(tm), bodyLimit, videoHandler.Create)
-	api.POST("/videos/:id/complete", middleware.Auth(tm), videoHandler.Complete)
+	api.GET("/videos/:id", middleware.OptionalAuth(tm), videoHandler.Detail)
+	api.GET("/videos/:id/comments", engagementHandler.ListComments)
+
+	// 需要登录的写端点。
+	api.POST("/videos", requireAuth, bodyLimit, videoHandler.Create)
+	api.POST("/videos/:id/complete", requireAuth, videoHandler.Complete)
+	api.POST("/videos/:id/comments", requireAuth, bodyLimit, engagementHandler.CreateComment)
+	api.DELETE("/comments/:id", requireAuth, engagementHandler.DeleteComment)
+	api.PUT("/videos/:id/like", requireAuth, engagementHandler.Like)
+	api.DELETE("/videos/:id/like", requireAuth, engagementHandler.Unlike)
+	api.PUT("/videos/:id/favorite", requireAuth, engagementHandler.Favorite)
+	api.DELETE("/videos/:id/favorite", requireAuth, engagementHandler.Unfavorite)
+	api.POST("/videos/:id/watch", requireAuth, engagementHandler.RecordWatch)
+
+	api.GET("/users/me/videos", requireAuth, videoHandler.Mine)
+	api.GET("/users/me/videos/:id", requireAuth, videoHandler.MineDetail)
+	api.PATCH("/users/me/videos/:id", requireAuth, bodyLimit, videoHandler.Update)
+	api.DELETE("/users/me/videos/:id", requireAuth, videoHandler.Delete)
+	api.GET("/users/me/favorites", requireAuth, engagementHandler.Favorites)
+	api.GET("/users/me/history", requireAuth, engagementHandler.History)
+	api.GET("/users/me/follows", requireAuth, followHandler.ListFollows)
+
+	api.PUT("/users/:id/follow", requireAuth, followHandler.Follow)
+	api.DELETE("/users/:id/follow", requireAuth, followHandler.Unfollow)
 
 	return r
 }

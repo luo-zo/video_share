@@ -75,7 +75,7 @@ func TestFollowHandlerMapsValidationAndStorageErrors(t *testing.T) {
 		status int
 		code   string
 	}{
-		{"self follow", ErrSelfFollow, http.StatusBadRequest, "INVALID_PARAMETER"},
+		{"self follow", ErrSelfFollow, http.StatusBadRequest, "SELF_FOLLOW"},
 		{"missing target", ErrUserNotFound, http.StatusNotFound, "NOT_FOUND"},
 		{"storage failure", errors.New("boom"), http.StatusInternalServerError, "INTERNAL_ERROR"},
 	}

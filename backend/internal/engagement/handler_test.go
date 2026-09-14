@@ -223,7 +223,7 @@ func TestCommentHandlersRejectBadInputAndMapErrors(t *testing.T) {
 		t.Fatalf("invalid page = %d, want 400", w.Code)
 	}
 	w = perform(r, http.MethodDelete, "/comments/3")
-	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), `"code":"FORBIDDEN"`) {
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), `"code":"COMMENT_FORBIDDEN"`) {
 		t.Fatalf("foreign comment delete = %d %s", w.Code, w.Body.String())
 	}
 }

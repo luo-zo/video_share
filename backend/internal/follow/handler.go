@@ -69,7 +69,7 @@ func (h *Handler) handleError(c *gin.Context, operation string, err error) {
 	case errors.Is(err, ErrUnauthorized):
 		response.Error(c, http.StatusUnauthorized, response.CodeUnauthorized, "请先登录")
 	case errors.Is(err, ErrSelfFollow):
-		response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "不能关注自己")
+		response.Error(c, http.StatusBadRequest, response.CodeSelfFollow, "不能关注自己")
 	case errors.Is(err, ErrUserNotFound):
 		response.Error(c, http.StatusNotFound, response.CodeNotFound, "用户不存在")
 	case errors.Is(err, ErrPaginationInvalid):

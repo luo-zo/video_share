@@ -60,7 +60,7 @@ func (h *Handler) handleError(c *gin.Context, operation string, err error) {
 	case errors.Is(err, ErrCommentNotFound):
 		response.Error(c, http.StatusNotFound, response.CodeNotFound, "评论不存在")
 	case errors.Is(err, ErrCommentForbidden):
-		response.Error(c, http.StatusForbidden, response.CodeForbidden, "只能删除自己的评论")
+		response.Error(c, http.StatusForbidden, response.CodeCommentForbidden, "只能删除自己的评论")
 	case errors.Is(err, ErrContentInvalid):
 		response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "评论内容需为 1-500 个字符")
 	case errors.Is(err, ErrProgressInvalid):

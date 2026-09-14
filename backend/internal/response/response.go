@@ -10,6 +10,8 @@ const (
 	CodeRequestTooLarge    = "REQUEST_TOO_LARGE"
 	CodeUnauthorized       = "UNAUTHORIZED"
 	CodeForbidden          = "FORBIDDEN"
+	CodeCommentForbidden   = "COMMENT_FORBIDDEN"
+	CodeSelfFollow         = "SELF_FOLLOW"
 	CodeAccountDisabled    = "ACCOUNT_DISABLED"
 	CodeUserAlreadyExists  = "USER_ALREADY_EXISTS"
 	CodeInvalidCredentials = "INVALID_CREDENTIALS"

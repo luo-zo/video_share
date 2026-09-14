@@ -36,3 +36,29 @@ func Auth(tm *token.Manager) gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+// OptionalAuth 在携带有效 Bearer 令牌时设置 user_id，否则以匿名身份放行。它从不
+// 写出响应，因此同一个公开处理器既能服务匿名访问，也能返回当前用户的互动状态。
+// 无效或过期的令牌按未认证处理，不会泄露错误细节。
+func OptionalAuth(tm *token.Manager) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if id := bearerUserID(c, tm); id != 0 {
+			c.Set(UserIDKey, id)
+		}
+		c.Next()
+	}
+}
+
+// bearerUserID 从可选的 Authorization 头解析用户 ID；头缺失、格式错误或令牌无效
+// 时都返回 0，表示匿名访问。
+func bearerUserID(c *gin.Context, tm *token.Manager) uint64 {
+	scheme, raw, ok := strings.Cut(c.GetHeader("Authorization"), " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") || raw == "" {
+		return 0
+	}
+	claims, err := tm.Parse(raw)
+	if err != nil {
+		return 0
+	}
+	return claims.UserID
+}

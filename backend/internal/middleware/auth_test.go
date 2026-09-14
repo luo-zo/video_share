@@ -125,3 +125,66 @@ func TestAuthRejectsWrongAlgorithm(t *testing.T) {
 		t.Fatalf("status = %d, want 401", w.Code)
 	}
 }
+
+func setupOptionalAuthRouter(tm *token.Manager) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/public", OptionalAuth(tm), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"uid": c.GetUint64(UserIDKey)})
+	})
+	return r
+}
+
+func TestOptionalAuthTreatsMissingHeaderAsAnonymous(t *testing.T) {
+	tm := token.NewManager("secret", "video-share", time.Hour)
+	w := httptest.NewRecorder()
+	setupOptionalAuthRouter(tm).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/public", nil))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"uid":0`) {
+		t.Fatalf("body = %s, want anonymous uid 0", w.Body.String())
+	}
+}
+
+func TestOptionalAuthSetsUserIDFromValidToken(t *testing.T) {
+	tm := token.NewManager("secret", "video-share", time.Hour)
+	tok, _, _ := tm.Generate(42)
+
+	req := httptest.NewRequest(http.MethodGet, "/public", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	w := httptest.NewRecorder()
+	setupOptionalAuthRouter(tm).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"uid":42`) {
+		t.Fatalf("body = %s, want uid 42", w.Body.String())
+	}
+}
+
+func TestOptionalAuthIgnoresInvalidTokensAnonymously(t *testing.T) {
+	tm := token.NewManager("secret", "video-share", time.Hour)
+	tok, _, _ := tm.Generate(7)
+	parts := strings.Split(tok, ".")
+	parts[2] = strings.Repeat("A", len(parts[2]))
+	tampered := strings.Join(parts, ".")
+
+	for _, h := range []string{"", "Bearer", "Basic abc", "Bearer ", "Bearer not-a-token", "Bearer " + tampered} {
+		req := httptest.NewRequest(http.MethodGet, "/public", nil)
+		if h != "" {
+			req.Header.Set("Authorization", h)
+		}
+		w := httptest.NewRecorder()
+		setupOptionalAuthRouter(tm).ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("header %q: status = %d, want 200", h, w.Code)
+		}
+		if !strings.Contains(w.Body.String(), `"uid":0`) {
+			t.Fatalf("header %q: body = %s, want anonymous", h, w.Body.String())
+		}
+	}
+}
