@@ -237,3 +237,159 @@ func TestListHandlerAcceptsSearchAndRejectsInvalidSort(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateHandlerMapsOwnerErrorsAndSuccess(t *testing.T) {
+	cases := []struct {
+		name   string
+		body   string
+		video  *Video
+		status int
+		code   string
+	}{
+		{
+			name:   "success",
+			body:   `{"title":"  新标题  ","visibility":"public"}`,
+			video:  &Video{ID: 9, UserID: 7, Title: "旧标题", Status: StatusReady, Visibility: VisibilityPrivate},
+			status: http.StatusOK,
+		},
+		{
+			name:   "forbidden for another author",
+			body:   `{"title":"新标题"}`,
+			video:  &Video{ID: 9, UserID: 8, Status: StatusReady},
+			status: http.StatusForbidden,
+			code:   "FORBIDDEN",
+		},
+		{
+			name:   "deleted video is not found",
+			body:   `{"title":"新标题"}`,
+			video:  &Video{ID: 9, UserID: 7, Status: StatusDeleted},
+			status: http.StatusNotFound,
+			code:   "NOT_FOUND",
+		},
+		{
+			name:   "empty patch",
+			body:   `{}`,
+			video:  &Video{ID: 9, UserID: 7, Status: StatusReady},
+			status: http.StatusBadRequest,
+			code:   "INVALID_PARAMETER",
+		},
+		{
+			name:   "unknown visibility",
+			body:   `{"visibility":"hidden"}`,
+			video:  &Video{ID: 9, UserID: 7, Status: StatusReady},
+			status: http.StatusBadRequest,
+			code:   "INVALID_PARAMETER",
+		},
+		{
+			name:   "malformed json",
+			body:   `{"title":`,
+			video:  &Video{ID: 9, UserID: 7, Status: StatusReady},
+			status: http.StatusBadRequest,
+			code:   "INVALID_PARAMETER",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &mockRepository{}
+			repo.findByIDFn = func(context.Context, uint64) (*Video, error) {
+				copy := *tc.video
+				return &copy, nil
+			}
+			repo.updateOwnedFn = func(_ context.Context, _, _ uint64, patch VideoPatch) error {
+				if patch.Title != nil {
+					tc.video.Title = *patch.Title
+				}
+				if patch.Visibility != nil {
+					tc.video.Visibility = *patch.Visibility
+				}
+				return nil
+			}
+			h := newHandlerForTest(repo, &mockObjectStore{})
+			r := gin.New()
+			r.PATCH("/videos/:id", withUserID(7), h.Update)
+			r.PATCH("/open/:id", h.Update)
+
+			w := performRequest(r, http.MethodPatch, "/videos/9", tc.body)
+			if w.Code != tc.status {
+				t.Fatalf("status = %d, want %d; body=%s", w.Code, tc.status, w.Body.String())
+			}
+			if tc.code != "" && !strings.Contains(w.Body.String(), tc.code) {
+				t.Fatalf("body = %s, want code %s", w.Body.String(), tc.code)
+			}
+			if tc.status == http.StatusOK {
+				if !strings.Contains(w.Body.String(), `"title":"新标题"`) || !strings.Contains(w.Body.String(), `"visibility":"public"`) {
+					t.Fatalf("body = %s", w.Body.String())
+				}
+			}
+
+			open := performRequest(r, http.MethodPatch, "/open/9", tc.body)
+			if open.Code != http.StatusUnauthorized {
+				t.Fatalf("unauthenticated status = %d, want 401", open.Code)
+			}
+		})
+	}
+}
+
+func TestUpdateHandlerRejectsBadVideoID(t *testing.T) {
+	h := newHandlerForTest(&mockRepository{}, &mockObjectStore{})
+	r := gin.New()
+	r.PATCH("/videos/:id", withUserID(7), h.Update)
+
+	w := performRequest(r, http.MethodPatch, "/videos/nope", `{"title":"新标题"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestDeleteHandlerMapsOwnerErrorsAndSuccess(t *testing.T) {
+	cases := []struct {
+		name   string
+		path   string
+		video  *Video
+		status int
+		code   string
+	}{
+		{name: "success", path: "/videos/9", video: &Video{ID: 9, UserID: 7, Status: StatusReady}, status: http.StatusOK},
+		{name: "forbidden for another author", path: "/videos/9", video: &Video{ID: 9, UserID: 8, Status: StatusReady}, status: http.StatusForbidden, code: "FORBIDDEN"},
+		{name: "already deleted is not found", path: "/videos/9", video: &Video{ID: 9, UserID: 7, Status: StatusDeleted}, status: http.StatusNotFound, code: "NOT_FOUND"},
+		{name: "bad video id", path: "/videos/nope", video: &Video{ID: 9, UserID: 7, Status: StatusReady}, status: http.StatusBadRequest, code: "INVALID_PARAMETER"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &mockRepository{}
+			repo.findByIDFn = func(context.Context, uint64) (*Video, error) {
+				copy := *tc.video
+				return &copy, nil
+			}
+			repo.deleteOwnedFn = func(context.Context, uint64, uint64) error { return nil }
+			h := newHandlerForTest(repo, &mockObjectStore{})
+			r := gin.New()
+			r.DELETE("/videos/:id", withUserID(7), h.Delete)
+			r.DELETE("/open/:id", h.Delete)
+
+			w := performRequest(r, http.MethodDelete, tc.path, "")
+			if w.Code != tc.status {
+				t.Fatalf("status = %d, want %d; body=%s", w.Code, tc.status, w.Body.String())
+			}
+			if tc.code != "" && !strings.Contains(w.Body.String(), tc.code) {
+				t.Fatalf("body = %s, want code %s", w.Body.String(), tc.code)
+			}
+
+			open := performRequest(r, http.MethodDelete, "/open"+tc.path[len("/videos"):], "")
+			if open.Code != http.StatusUnauthorized {
+				t.Fatalf("unauthenticated status = %d, want 401", open.Code)
+			}
+		})
+	}
+}
+
+func TestDeleteHandlerRequiresAuthenticatedUser(t *testing.T) {
+	h := newHandlerForTest(&mockRepository{}, &mockObjectStore{})
+	r := gin.New()
+	r.DELETE("/videos/:id", h.Delete)
+
+	w := performRequest(r, http.MethodDelete, "/videos/9", "")
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", w.Code)
+	}
+}

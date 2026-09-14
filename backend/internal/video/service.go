@@ -26,6 +26,8 @@ var (
 	ErrUploadMismatch     = errors.New("uploaded object does not match submission")
 	ErrStateConflict      = errors.New("video state conflict")
 	ErrListQueryInvalid   = errors.New("invalid list query")
+	ErrVisibilityInvalid  = errors.New("invalid video visibility")
+	ErrPatchEmpty         = errors.New("empty video update")
 )
 
 // maxSearchQueryRunes bounds the discovery keyword after trimming.
@@ -281,8 +283,54 @@ func (s *Service) Mine(ctx context.Context, userID uint64, page, pageSize int) (
 }
 
 func (s *Service) MineDetail(ctx context.Context, userID, videoID uint64) (*OwnerVideoResponse, error) {
+	v, err := s.ownedVideo(ctx, userID, videoID)
+	if err != nil {
+		return nil, err
+	}
+	result := toOwnerVideoResponse(v)
+	return &result, nil
+}
+
+// Update applies an author's partial update to their own video. Fields that were
+// left out keep their stored value, and the first publish time is preserved.
+func (s *Service) Update(ctx context.Context, userID, videoID uint64, req UpdateRequest) (*OwnerVideoResponse, error) {
+	v, err := s.ownedVideo(ctx, userID, videoID)
+	if err != nil {
+		return nil, err
+	}
+	patch, err := buildVideoPatch(req)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.repo.UpdateOwned(ctx, userID, v.ID, patch); err != nil {
+		return nil, err
+	}
+	updated, err := s.repo.FindByID(ctx, v.ID)
+	if err != nil {
+		return nil, err
+	}
+	result := toOwnerVideoResponse(updated)
+	return &result, nil
+}
+
+// Delete logically deletes an author's own video. Repeating the call reports the
+// video as missing rather than reviving or corrupting it.
+func (s *Service) Delete(ctx context.Context, userID, videoID uint64) error {
+	v, err := s.ownedVideo(ctx, userID, videoID)
+	if err != nil {
+		return err
+	}
+	return s.repo.DeleteOwned(ctx, userID, v.ID)
+}
+
+// ownedVideo loads a video and rejects the request unless the caller owns it.
+// Deleted videos are reported as missing so they never leak their former owner.
+func (s *Service) ownedVideo(ctx context.Context, userID, videoID uint64) (*Video, error) {
 	if userID == 0 {
 		return nil, ErrUnauthorized
+	}
+	if videoID == 0 {
+		return nil, ErrNotFound
 	}
 	v, err := s.repo.FindByID(ctx, videoID)
 	if err != nil {
@@ -294,8 +342,49 @@ func (s *Service) MineDetail(ctx context.Context, userID, videoID uint64) (*Owne
 	if v.UserID != userID {
 		return nil, ErrForbidden
 	}
-	result := toOwnerVideoResponse(v)
-	return &result, nil
+	return v, nil
+}
+
+// buildVideoPatch validates and trims an update request into the partial patch
+// the repository applies. An update that names no field is rejected outright.
+func buildVideoPatch(req UpdateRequest) (VideoPatch, error) {
+	var patch VideoPatch
+	if req.Title != nil {
+		title := strings.TrimSpace(*req.Title)
+		if n := utf8.RuneCountInString(title); n == 0 || n > 100 {
+			return VideoPatch{}, ErrTitleInvalid
+		}
+		patch.Title = &title
+	}
+	if req.Description != nil {
+		description := strings.TrimSpace(*req.Description)
+		if utf8.RuneCountInString(description) > 2000 {
+			return VideoPatch{}, ErrDescriptionInvalid
+		}
+		patch.Description = &description
+	}
+	if req.Visibility != nil {
+		visibility, ok := parseVisibility(*req.Visibility)
+		if !ok {
+			return VideoPatch{}, ErrVisibilityInvalid
+		}
+		patch.Visibility = &visibility
+	}
+	if patch.Title == nil && patch.Description == nil && patch.Visibility == nil {
+		return VideoPatch{}, ErrPatchEmpty
+	}
+	return patch, nil
+}
+
+func parseVisibility(value string) (Visibility, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "public":
+		return VisibilityPublic, true
+	case "private":
+		return VisibilityPrivate, true
+	default:
+		return 0, false
+	}
 }
 
 func (s *Service) HLSManifest(ctx context.Context, videoID uint64, manifestPath string) ([]byte, error) {

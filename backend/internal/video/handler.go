@@ -127,6 +127,46 @@ func (h *Handler) MineDetail(c *gin.Context) {
 	response.OK(c, http.StatusOK, result)
 }
 
+func (h *Handler) Update(c *gin.Context) {
+	userID := c.GetUint64(middleware.UserIDKey)
+	if userID == 0 {
+		response.Error(c, http.StatusUnauthorized, response.CodeUnauthorized, "请先登录")
+		return
+	}
+	id, ok := videoID(c)
+	if !ok {
+		return
+	}
+	var req UpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "invalid request body")
+		return
+	}
+	result, err := h.svc.Update(c.Request.Context(), userID, id, req)
+	if err != nil {
+		h.handleError(c, "update video", err)
+		return
+	}
+	response.OK(c, http.StatusOK, result)
+}
+
+func (h *Handler) Delete(c *gin.Context) {
+	userID := c.GetUint64(middleware.UserIDKey)
+	if userID == 0 {
+		response.Error(c, http.StatusUnauthorized, response.CodeUnauthorized, "请先登录")
+		return
+	}
+	id, ok := videoID(c)
+	if !ok {
+		return
+	}
+	if err := h.svc.Delete(c.Request.Context(), userID, id); err != nil {
+		h.handleError(c, "delete video", err)
+		return
+	}
+	response.OK(c, http.StatusOK, gin.H{"id": id})
+}
+
 func (h *Handler) HLS(c *gin.Context) {
 	id, ok := videoID(c)
 	if !ok {
@@ -220,6 +260,10 @@ func (h *Handler) handleError(c *gin.Context, operation string, err error) {
 		response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "分页参数无效")
 	case errors.Is(err, ErrListQueryInvalid):
 		response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "搜索关键词过长或排序无效")
+	case errors.Is(err, ErrPatchEmpty):
+		response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "没有需要更新的字段")
+	case errors.Is(err, ErrVisibilityInvalid):
+		response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "可见性只能是 public 或 private")
 	case errors.Is(err, ErrUploadIncomplete):
 		response.Error(c, http.StatusConflict, response.CodeUploadIncomplete, "视频文件尚未上传完成")
 	case errors.Is(err, ErrUploadMismatch):

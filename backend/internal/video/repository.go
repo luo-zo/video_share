@@ -26,6 +26,8 @@ type Repository interface {
 	ListPublic(ctx context.Context, query ListQuery) ([]Video, int64, error)
 	FindPublicByID(ctx context.Context, id uint64) (*Video, error)
 	ViewerState(ctx context.Context, viewerID, videoID, authorID uint64) (*ViewerState, error)
+	UpdateOwned(ctx context.Context, userID, videoID uint64, patch VideoPatch) error
+	DeleteOwned(ctx context.Context, userID, videoID uint64) error
 }
 
 type gormRepository struct {
@@ -363,6 +365,66 @@ func (r *gormRepository) ViewerState(ctx context.Context, viewerID, videoID, aut
 		state.FollowingAuthor = following
 	}
 	return state, nil
+}
+
+// UpdateOwned applies a partial update that only the author may perform. A ready
+// video that becomes public for the first time records its publish time; later
+// visibility changes keep that first value.
+func (r *gormRepository) UpdateOwned(ctx context.Context, userID, videoID uint64, patch VideoPatch) error {
+	updates := map[string]any{"updated_at": gorm.Expr("UTC_TIMESTAMP(3)")}
+	if patch.Title != nil {
+		updates["title"] = *patch.Title
+	}
+	if patch.Description != nil {
+		updates["description"] = *patch.Description
+	}
+	if patch.Visibility != nil {
+		updates["visibility"] = *patch.Visibility
+		if *patch.Visibility == VisibilityPublic {
+			updates["published_at"] = gorm.Expr(
+				"COALESCE(published_at, CASE WHEN status = ? THEN UTC_TIMESTAMP(3) ELSE NULL END)", StatusReady)
+		}
+	}
+	result := r.db.WithContext(ctx).Model(&Video{}).
+		Where("id = ? AND user_id = ? AND status <> ?", videoID, userID, StatusDeleted).
+		Updates(updates)
+	if result.Error != nil {
+		return fmt.Errorf("update owned video: %w", result.Error)
+	}
+	if result.RowsAffected > 0 {
+		return nil
+	}
+	// MySQL reports changed rows, so an update whose values are already stored
+	// also reports zero. Confirm the row still exists before calling it missing.
+	var exists int64
+	if err := r.db.WithContext(ctx).Model(&Video{}).
+		Where("id = ? AND user_id = ? AND status <> ?", videoID, userID, StatusDeleted).
+		Count(&exists).Error; err != nil {
+		return fmt.Errorf("confirm owned video: %w", err)
+	}
+	if exists == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteOwned logically deletes an author's own video and makes it private so a
+// stale link cannot keep serving it. Deleting twice reports the video as missing.
+func (r *gormRepository) DeleteOwned(ctx context.Context, userID, videoID uint64) error {
+	result := r.db.WithContext(ctx).Model(&Video{}).
+		Where("id = ? AND user_id = ? AND status <> ?", videoID, userID, StatusDeleted).
+		Updates(map[string]any{
+			"status":     StatusDeleted,
+			"visibility": VisibilityPrivate,
+			"updated_at": gorm.Expr("UTC_TIMESTAMP(3)"),
+		})
+	if result.Error != nil {
+		return fmt.Errorf("delete owned video: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (r *gormRepository) relationExists(ctx context.Context, table, ownerColumn, targetColumn string, ownerID, targetID uint64) (bool, error) {

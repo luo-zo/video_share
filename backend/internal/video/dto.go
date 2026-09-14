@@ -13,6 +13,21 @@ type CreateRequest struct {
 	FileSize    int64  `json:"file_size" binding:"required"`
 }
 
+// UpdateRequest is an author's partial update. Pointer fields distinguish a
+// field that was left out from one that was supplied with an empty value.
+type UpdateRequest struct {
+	Title       *string `json:"title"`
+	Description *string `json:"description"`
+	Visibility  *string `json:"visibility"`
+}
+
+// VideoPatch carries only the validated fields an author chose to change.
+type VideoPatch struct {
+	Title       *string
+	Description *string
+	Visibility  *Visibility
+}
+
 // Sort selects the public discovery ordering.
 type Sort string
 

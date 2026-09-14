@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -300,6 +301,121 @@ func TestRepositoryViewerState(t *testing.T) {
 	}
 	if anonymous.Liked || anonymous.Favorited || anonymous.FollowingAuthor {
 		t.Fatalf("anonymous state = %+v", anonymous)
+	}
+}
+
+func TestRepositoryUpdateOwnedAndDeleteOwned(t *testing.T) {
+	db := openTestDB(t)
+	repo := NewRepository(db)
+	ctx := context.Background()
+	alice, bob := seedUsers(t, db)
+
+	id := seedVideo(t, db, alice, "可管理视频", "描述", StatusReady, VisibilityPrivate,
+		"2026-09-10 10:00:00", [4]uint64{0, 0, 0, 0})
+	if err := db.Exec(`UPDATE videos SET published_at = NULL WHERE id = ?`, id).Error; err != nil {
+		t.Fatalf("clear published_at: %v", err)
+	}
+
+	public := VisibilityPublic
+	private := VisibilityPrivate
+	title := "新标题"
+	description := "新简介"
+
+	type snapshot struct {
+		Title       string
+		Description string
+		Status      Status
+		Visibility  Visibility
+		PublishedAt *time.Time
+	}
+	var row snapshot
+	read := func() snapshot {
+		t.Helper()
+		if err := db.Raw(`SELECT title, description, status, visibility, published_at FROM videos WHERE id = ?`, id).
+			Scan(&row).Error; err != nil {
+			t.Fatalf("read video: %v", err)
+		}
+		return row
+	}
+
+	if err := repo.UpdateOwned(ctx, bob, id, VideoPatch{Title: &title}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("non-owner update error = %v, want ErrNotFound", err)
+	}
+	if err := repo.UpdateOwned(ctx, alice, id, VideoPatch{Title: &title, Description: &description}); err != nil {
+		t.Fatalf("UpdateOwned: %v", err)
+	}
+	// Values that are already stored must not be mistaken for a missing row.
+	if err := repo.UpdateOwned(ctx, alice, id, VideoPatch{Title: &title, Description: &description}); err != nil {
+		t.Fatalf("repeated UpdateOwned: %v", err)
+	}
+	if got := read(); got.Title != "新标题" || got.Description != "新简介" {
+		t.Fatalf("patch not applied: %+v", got)
+	}
+	if got := read(); got.PublishedAt != nil {
+		t.Fatalf("private video published_at = %v, want NULL", got.PublishedAt)
+	}
+
+	if err := repo.UpdateOwned(ctx, alice, id, VideoPatch{Visibility: &public}); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	first := read().PublishedAt
+	if first == nil {
+		t.Fatal("first publish must record published_at")
+	}
+	if _, err := repo.FindPublicByID(ctx, id); err != nil {
+		t.Fatalf("published video must be discoverable: %v", err)
+	}
+
+	if err := repo.UpdateOwned(ctx, alice, id, VideoPatch{Visibility: &private}); err != nil {
+		t.Fatalf("unpublish: %v", err)
+	}
+	if got := read(); got.PublishedAt == nil || !got.PublishedAt.Equal(*first) {
+		t.Fatalf("unpublish published_at = %v, want %v", got.PublishedAt, first)
+	}
+	if _, err := repo.FindPublicByID(ctx, id); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("private video error = %v, want ErrNotFound", err)
+	}
+
+	if err := repo.UpdateOwned(ctx, alice, id, VideoPatch{Visibility: &public}); err != nil {
+		t.Fatalf("republish: %v", err)
+	}
+	if got := read(); got.PublishedAt == nil || !got.PublishedAt.Equal(*first) {
+		t.Fatalf("republish published_at = %v, want the original %v", got.PublishedAt, first)
+	}
+
+	// A video that is not ready yet never records a publish time.
+	uploadingKey := "videos/uploading-management.mp4"
+	if err := db.Exec(`INSERT INTO videos (user_id, title, description, object_key, status, visibility, file_size, content_type)
+		VALUES (?, ?, '', ?, ?, ?, 1024, 'video/mp4')`,
+		alice, "上传中的视频", uploadingKey, StatusUploading, VisibilityPrivate).Error; err != nil {
+		t.Fatalf("insert uploading video: %v", err)
+	}
+	uploadingID := lookupID(t, db, `SELECT id FROM videos WHERE object_key = ?`, uploadingKey)
+	if err := repo.UpdateOwned(ctx, alice, uploadingID, VideoPatch{Visibility: &public}); err != nil {
+		t.Fatalf("publish uploading video: %v", err)
+	}
+	var uploadingRow struct{ PublishedAt *time.Time }
+	if err := db.Raw(`SELECT published_at FROM videos WHERE id = ?`, uploadingID).Scan(&uploadingRow).Error; err != nil {
+		t.Fatalf("read uploading published_at: %v", err)
+	}
+	if uploadingRow.PublishedAt != nil {
+		t.Fatalf("uploading video published_at = %v, want NULL", uploadingRow.PublishedAt)
+	}
+
+	if err := repo.DeleteOwned(ctx, alice, id); err != nil {
+		t.Fatalf("DeleteOwned: %v", err)
+	}
+	if got := read(); got.Status != StatusDeleted || got.Visibility != VisibilityPrivate {
+		t.Fatalf("deleted row = %+v", got)
+	}
+	if _, err := repo.FindPublicByID(ctx, id); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted video error = %v, want ErrNotFound", err)
+	}
+	if err := repo.DeleteOwned(ctx, alice, id); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("repeated DeleteOwned error = %v, want ErrNotFound", err)
+	}
+	if err := repo.UpdateOwned(ctx, alice, id, VideoPatch{Title: &title}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("update deleted video error = %v, want ErrNotFound", err)
 	}
 }
 

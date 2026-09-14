@@ -27,7 +27,25 @@ type mockRepository struct {
 	findPublicByIDFn  func(context.Context, uint64) (*Video, error)
 	viewerStateFn     func(context.Context, uint64, uint64, uint64) (*ViewerState, error)
 	listByUserFn      func(context.Context, uint64, int, int) ([]Video, int64, error)
+	updateOwnedFn     func(context.Context, uint64, uint64, VideoPatch) error
+	deleteOwnedFn     func(context.Context, uint64, uint64) error
 }
+
+func (m *mockRepository) UpdateOwned(ctx context.Context, userID, videoID uint64, patch VideoPatch) error {
+	if m.updateOwnedFn == nil {
+		return nil
+	}
+	return m.updateOwnedFn(ctx, userID, videoID, patch)
+}
+
+func (m *mockRepository) DeleteOwned(ctx context.Context, userID, videoID uint64) error {
+	if m.deleteOwnedFn == nil {
+		return nil
+	}
+	return m.deleteOwnedFn(ctx, userID, videoID)
+}
+
+func strPtr(value string) *string { return &value }
 
 func (m *mockRepository) Create(ctx context.Context, v *Video) error {
 	if m.createFn == nil {
@@ -441,6 +459,189 @@ func TestListQueryRejectsInvalidSearchAndSort(t *testing.T) {
 func TestEscapeLikeTreatsWildcardsAsLiteralCharacters(t *testing.T) {
 	if got, want := escapeLike(`猫!_%`, '!'), `猫!!!_!%`; got != want {
 		t.Fatalf("escapeLike = %q, want %q", got, want)
+	}
+}
+
+func TestUpdateVideoRejectsInvalidOwnerOrPatch(t *testing.T) {
+	ready := &Video{ID: 9, UserID: 7, Title: "原标题", Status: StatusReady, Visibility: VisibilityPrivate}
+	deleted := &Video{ID: 9, UserID: 7, Status: StatusDeleted}
+	cases := []struct {
+		name    string
+		userID  uint64
+		videoID uint64
+		video   *Video
+		req     UpdateRequest
+		want    error
+	}{
+		{name: "missing user", userID: 0, videoID: 9, video: ready, req: UpdateRequest{Title: strPtr("新")}, want: ErrUnauthorized},
+		{name: "missing video", userID: 7, videoID: 0, video: ready, req: UpdateRequest{Title: strPtr("新")}, want: ErrNotFound},
+		{name: "unknown video", userID: 7, videoID: 9, video: nil, req: UpdateRequest{Title: strPtr("新")}, want: ErrNotFound},
+		{name: "non owner", userID: 8, videoID: 9, video: ready, req: UpdateRequest{Title: strPtr("新")}, want: ErrForbidden},
+		{name: "already deleted", userID: 7, videoID: 9, video: deleted, req: UpdateRequest{Title: strPtr("新")}, want: ErrNotFound},
+		{name: "empty patch", userID: 7, videoID: 9, video: ready, req: UpdateRequest{}, want: ErrPatchEmpty},
+		{name: "blank title", userID: 7, videoID: 9, video: ready, req: UpdateRequest{Title: strPtr("   ")}, want: ErrTitleInvalid},
+		{name: "long title", userID: 7, videoID: 9, video: ready, req: UpdateRequest{Title: strPtr(strings.Repeat("题", 101))}, want: ErrTitleInvalid},
+		{name: "long description", userID: 7, videoID: 9, video: ready, req: UpdateRequest{Description: strPtr(strings.Repeat("介", 2001))}, want: ErrDescriptionInvalid},
+		{name: "unknown visibility", userID: 7, videoID: 9, video: ready, req: UpdateRequest{Visibility: strPtr("unlisted")}, want: ErrVisibilityInvalid},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &mockRepository{}
+			repo.findByIDFn = func(context.Context, uint64) (*Video, error) {
+				if tc.video == nil {
+					return nil, ErrNotFound
+				}
+				copy := *tc.video
+				return &copy, nil
+			}
+			repo.updateOwnedFn = func(context.Context, uint64, uint64, VideoPatch) error {
+				t.Fatal("invalid update must not reach the repository")
+				return nil
+			}
+			_, err := newTestService(repo, &mockObjectStore{}).Update(context.Background(), tc.userID, tc.videoID, tc.req)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("error = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestUpdateVideoAppliesTrimmedPatchWithoutTouchingAbsentFields(t *testing.T) {
+	firstPublish := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
+	current := &Video{ID: 9, UserID: 7, Title: "旧标题", Description: "旧简介", Status: StatusReady, Visibility: VisibilityPrivate}
+	var got VideoPatch
+	repo := &mockRepository{}
+	repo.findByIDFn = func(context.Context, uint64) (*Video, error) { return current, nil }
+	repo.updateOwnedFn = func(_ context.Context, userID, videoID uint64, patch VideoPatch) error {
+		if userID != 7 || videoID != 9 {
+			t.Fatalf("UpdateOwned args = %d/%d", userID, videoID)
+		}
+		got = patch
+		if patch.Title != nil {
+			current.Title = *patch.Title
+		}
+		if patch.Description != nil {
+			current.Description = *patch.Description
+		}
+		if patch.Visibility != nil {
+			current.Visibility = *patch.Visibility
+		}
+		if current.PublishedAt == nil && current.Visibility == VisibilityPublic && current.Status == StatusReady {
+			current.PublishedAt = &firstPublish
+		}
+		return nil
+	}
+
+	result, err := newTestService(repo, &mockObjectStore{}).Update(context.Background(), 7, 9, UpdateRequest{
+		Title:      strPtr("  新标题  "),
+		Visibility: strPtr("public"),
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got.Title == nil || *got.Title != "新标题" {
+		t.Fatalf("trimmed title patch = %v", got.Title)
+	}
+	if got.Description != nil {
+		t.Fatalf("absent description must stay nil, got %q", *got.Description)
+	}
+	if got.Visibility == nil || *got.Visibility != VisibilityPublic {
+		t.Fatalf("visibility patch = %v", got.Visibility)
+	}
+	if result.Visibility != "public" || result.PublishedAt == nil || !result.PublishedAt.Equal(firstPublish) {
+		t.Fatalf("response = %+v", result)
+	}
+}
+
+func TestUpdateVideoKeepsFirstPublishTimeWhenTogglingVisibility(t *testing.T) {
+	firstPublish := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
+	current := &Video{ID: 9, UserID: 7, Status: StatusReady, Visibility: VisibilityPublic, PublishedAt: &firstPublish}
+	repo := &mockRepository{}
+	repo.findByIDFn = func(context.Context, uint64) (*Video, error) { return current, nil }
+	repo.updateOwnedFn = func(_ context.Context, _, _ uint64, patch VideoPatch) error {
+		current.Visibility = *patch.Visibility
+		return nil
+	}
+
+	result, err := newTestService(repo, &mockObjectStore{}).Update(context.Background(), 7, 9, UpdateRequest{Visibility: strPtr("private")})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if result.Visibility != "private" {
+		t.Fatalf("visibility = %q", result.Visibility)
+	}
+	if result.PublishedAt == nil || !result.PublishedAt.Equal(firstPublish) {
+		t.Fatalf("first publish time must be preserved, got %v", result.PublishedAt)
+	}
+}
+
+func TestUpdateVideoRejectsMissingUserWithoutRepositoryWork(t *testing.T) {
+	repo := &mockRepository{}
+	repo.findByIDFn = func(context.Context, uint64) (*Video, error) {
+		t.Fatal("missing user must not load a video")
+		return nil, ErrNotFound
+	}
+	_, err := newTestService(repo, &mockObjectStore{}).Update(context.Background(), 0, 9, UpdateRequest{Title: strPtr("新")})
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("error = %v, want ErrUnauthorized", err)
+	}
+}
+
+func TestDeleteVideoRequiresOwnershipAndTreatsDeletedAsMissing(t *testing.T) {
+	ready := &Video{ID: 9, UserID: 7, Status: StatusReady}
+	cases := []struct {
+		name    string
+		userID  uint64
+		videoID uint64
+		video   *Video
+		want    error
+	}{
+		{name: "missing user", userID: 0, videoID: 9, video: ready, want: ErrUnauthorized},
+		{name: "missing video", userID: 7, videoID: 0, video: ready, want: ErrNotFound},
+		{name: "unknown video", userID: 7, videoID: 9, video: nil, want: ErrNotFound},
+		{name: "non owner", userID: 8, videoID: 9, video: ready, want: ErrForbidden},
+		{name: "already deleted", userID: 7, videoID: 9, video: &Video{ID: 9, UserID: 7, Status: StatusDeleted}, want: ErrNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &mockRepository{}
+			repo.findByIDFn = func(context.Context, uint64) (*Video, error) {
+				if tc.video == nil {
+					return nil, ErrNotFound
+				}
+				copy := *tc.video
+				return &copy, nil
+			}
+			repo.deleteOwnedFn = func(context.Context, uint64, uint64) error {
+				t.Fatal("rejected delete must not reach the repository")
+				return nil
+			}
+			err := newTestService(repo, &mockObjectStore{}).Delete(context.Background(), tc.userID, tc.videoID)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("error = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestDeleteVideoDelegatesToOwnerScopedDelete(t *testing.T) {
+	repo := &mockRepository{}
+	repo.findByIDFn = func(context.Context, uint64) (*Video, error) {
+		return &Video{ID: 9, UserID: 7, Status: StatusReady}, nil
+	}
+	called := false
+	repo.deleteOwnedFn = func(_ context.Context, userID, videoID uint64) error {
+		called = true
+		if userID != 7 || videoID != 9 {
+			t.Fatalf("DeleteOwned args = %d/%d", userID, videoID)
+		}
+		return nil
+	}
+	if err := newTestService(repo, &mockObjectStore{}).Delete(context.Background(), 7, 9); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if !called {
+		t.Fatal("DeleteOwned was not called")
 	}
 }
 

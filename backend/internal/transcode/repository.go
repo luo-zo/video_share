@@ -112,6 +112,8 @@ func (r *GormJobRepository) Succeed(ctx context.Context, job *Job, output Output
 				"processing_progress": 100,
 				"processing_error":    nil,
 				"processed_at":        now,
+				"published_at": gorm.Expr(
+					"COALESCE(published_at, CASE WHEN visibility = ? THEN UTC_TIMESTAMP(3) ELSE NULL END)", video.VisibilityPublic),
 			})
 		if videoResult.Error != nil {
 			return fmt.Errorf("publish processed video: %w", videoResult.Error)
