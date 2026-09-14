@@ -1,0 +1,176 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: video_share_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: video_share
+      MYSQL_USER: video_share
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-video_share}
+    ports:
+      - "3308:3306"
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p$$MYSQL_ROOT_PASSWORD"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  minio:
+    # MinIO 官方 Compose 示例使用 Quay；固定版本避免 Docker Hub 的 latest 失效。
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: video_share_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      # 以下默认凭证仅供本地开发，公网部署必须覆盖。
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_API_CORS_ALLOW_ORIGIN: ${MINIO_CORS_ALLOW_ORIGIN:-http://127.0.0.1:5173,http://localhost:5173}
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  kafka:
+    image: apache/kafka:4.0.0
+    container_name: video_share_kafka
+    restart: unless-stopped
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:29092,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://127.0.0.1:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    ports:
+      - "127.0.0.1:9092:9092"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+
+  kafka-init:
+    image: apache/kafka:4.0.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        /opt/kafka/bin/kafka-topics.sh
+        --bootstrap-server kafka:29092
+        --create
+        --if-not-exists
+        --topic ${KAFKA_TRANSCODE_TOPIC:-video.transcode.requested}
+        --partitions 1
+        --replication-factor 1
+    restart: "no"
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: api-runtime
+    env_file:
+      - ../.env
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MINIO_ENDPOINT: minio:9000
+      MINIO_PUBLIC_ENDPOINT: 127.0.0.1:9000
+      KAFKA_BROKERS: kafka:29092
+    command: ["migrate", "up"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: api-runtime
+    container_name: video_share_api
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      HTTP_ADDR: 0.0.0.0:8081
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MINIO_ENDPOINT: minio:9000
+      MINIO_PUBLIC_ENDPOINT: 127.0.0.1:9000
+      KAFKA_BROKERS: kafka:29092
+    ports:
+      - "127.0.0.1:8081:8081"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8081/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: worker-runtime
+    container_name: video_share_worker
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MINIO_ENDPOINT: minio:9000
+      MINIO_PUBLIC_ENDPOINT: 127.0.0.1:9000
+      KAFKA_BROKERS: kafka:29092
+      WORKER_ID: docker-worker-1
+      FFMPEG_PATH: ffmpeg
+      FFPROBE_PATH: ffprobe
+      TRANSCODE_TEMP_DIR: /tmp/video-share
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+volumes:
+  mysql_data:
+  minio_data:
+  kafka_data:
