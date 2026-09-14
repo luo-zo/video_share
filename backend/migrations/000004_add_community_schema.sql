@@ -1,11 +1,23 @@
 -- +goose Up
-ALTER TABLE videos
-    ADD COLUMN visibility TINYINT NOT NULL DEFAULT 1 COMMENT '1=public 2=private' AFTER status,
-    ADD COLUMN published_at DATETIME(3) NULL AFTER processed_at,
-    ADD CONSTRAINT chk_videos_visibility CHECK (visibility IN (1, 2)),
-    ADD KEY idx_videos_discovery_latest (status, visibility, published_at, id);
+-- MySQL DDL commits implicitly. Build the first ALTER dynamically so retrying
+-- after a connection loss between this ALTER and the CREATE TABLE statements
+-- safely skips the already committed video columns, constraint, and index.
+SET @community_video_alter = (
+    SELECT IF(
+        COUNT(*) = 0,
+        'ALTER TABLE videos ADD COLUMN visibility TINYINT NOT NULL DEFAULT 1 COMMENT ''1=public 2=private'' AFTER status, ADD COLUMN published_at DATETIME(3) NULL AFTER processed_at, ADD CONSTRAINT chk_videos_visibility CHECK (visibility IN (1, 2)), ADD KEY idx_videos_discovery_latest (status, visibility, published_at, id)',
+        'SELECT 1'
+    )
+    FROM information_schema.columns
+    WHERE table_schema = DATABASE()
+      AND table_name = 'videos'
+      AND column_name = 'visibility'
+);
+PREPARE community_video_alter_stmt FROM @community_video_alter;
+EXECUTE community_video_alter_stmt;
+DEALLOCATE PREPARE community_video_alter_stmt;
 
-CREATE TABLE video_stats (
+CREATE TABLE IF NOT EXISTS video_stats (
     video_id       BIGINT UNSIGNED NOT NULL,
     view_count     BIGINT UNSIGNED NOT NULL DEFAULT 0,
     like_count     BIGINT UNSIGNED NOT NULL DEFAULT 0,
@@ -16,7 +28,7 @@ CREATE TABLE video_stats (
     CONSTRAINT fk_video_stats_video FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE video_likes (
+CREATE TABLE IF NOT EXISTS video_likes (
     user_id    BIGINT UNSIGNED NOT NULL,
     video_id   BIGINT UNSIGNED NOT NULL,
     created_at DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -26,7 +38,7 @@ CREATE TABLE video_likes (
     CONSTRAINT fk_video_likes_video FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE video_favorites (
+CREATE TABLE IF NOT EXISTS video_favorites (
     user_id    BIGINT UNSIGNED NOT NULL,
     video_id   BIGINT UNSIGNED NOT NULL,
     created_at DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -37,7 +49,7 @@ CREATE TABLE video_favorites (
     CONSTRAINT fk_video_favorites_video FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE comments (
+CREATE TABLE IF NOT EXISTS comments (
     id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     video_id   BIGINT UNSIGNED NOT NULL,
     user_id    BIGINT UNSIGNED NOT NULL,
@@ -53,7 +65,7 @@ CREATE TABLE comments (
     CONSTRAINT chk_comments_content CHECK (CHAR_LENGTH(content) BETWEEN 1 AND 500)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE user_follows (
+CREATE TABLE IF NOT EXISTS user_follows (
     follower_id BIGINT UNSIGNED NOT NULL,
     followee_id BIGINT UNSIGNED NOT NULL,
     created_at  DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -65,7 +77,7 @@ CREATE TABLE user_follows (
     CONSTRAINT chk_user_follows_not_self CHECK (follower_id <> followee_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE watch_histories (
+CREATE TABLE IF NOT EXISTS watch_histories (
     user_id          BIGINT UNSIGNED NOT NULL,
     video_id         BIGINT UNSIGNED NOT NULL,
     progress_ms      BIGINT UNSIGNED NOT NULL DEFAULT 0,

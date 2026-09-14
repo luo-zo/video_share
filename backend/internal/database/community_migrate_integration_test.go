@@ -19,8 +19,20 @@ func TestCommunitySchemaConstraintsAndBackfill(t *testing.T) {
 		t.Fatalf("initial migrate up: %v", err)
 	}
 	if _, err := migrator.Down(ctx); err != nil {
-		t.Fatalf("temporarily roll back data migration: %v", err)
+		t.Fatalf("roll back data migration: %v", err)
 	}
+	if _, err := migrator.Down(ctx); err != nil {
+		t.Fatalf("roll back schema migration: %v", err)
+	}
+
+	// Simulate a connection loss after MySQL has committed the first ALTER but
+	// before Goose records migration 4. The next Up must recognize and preserve
+	// the columns while completing all remaining tables.
+	mustExec(t, db, `ALTER TABLE videos
+		ADD COLUMN visibility TINYINT NOT NULL DEFAULT 1 COMMENT '1=public 2=private' AFTER status,
+		ADD COLUMN published_at DATETIME(3) NULL AFTER processed_at,
+		ADD CONSTRAINT chk_videos_visibility CHECK (visibility IN (1, 2)),
+		ADD KEY idx_videos_discovery_latest (status, visibility, published_at, id)`)
 
 	mustExec(t, db, `INSERT INTO users (id, username, password_hash, nickname) VALUES
 		(1, 'author', 'hash', '作者'), (2, 'viewer', 'hash', '观众')`)
@@ -29,7 +41,7 @@ func TestCommunitySchemaConstraintsAndBackfill(t *testing.T) {
 		VALUES (1, 1, '猫咪散步', '傍晚记录', 'videos/1/source.mp4', 2, 1024, 'video/mp4', CURRENT_TIMESTAMP(3))`)
 
 	if _, err := migrator.Up(ctx); err != nil {
-		t.Fatalf("reapply community data migration: %v", err)
+		t.Fatalf("recover partially applied community migration: %v", err)
 	}
 
 	assertSchemaColumnCount(t, db, "videos", []string{"visibility", "published_at"}, 2)
