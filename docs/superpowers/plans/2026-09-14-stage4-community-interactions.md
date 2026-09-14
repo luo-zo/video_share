@@ -20,7 +20,7 @@
 - Create: `backend/internal/follow/model.go`
 - Create: `backend/internal/database/community_migrate_integration_test.go`
 
-- [ ] **Step 1: Write a failing migration integration test**
+- [x] **Step 1: Write a failing migration integration test**
 
 Create an isolated database with `testutil.MySQLDSN(t)`, run all migrations, and assert that `videos.visibility`, `videos.published_at`, `video_stats`, `video_likes`, `video_favorites`, `comments`, `user_follows`, and `watch_histories` exist. Insert duplicate like/favorite/follow rows and assert MySQL rejects them; insert a self-follow and assert the check constraint rejects it.
 
@@ -39,13 +39,13 @@ func TestCommunitySchemaConstraints(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the test and verify RED**
+- [x] **Step 2: Run the test and verify RED**
 
 Run: `go test -tags=integration ./internal/database -run TestCommunitySchemaConstraints -count=1`
 
 Expected: FAIL because migration `000004` and the community tables do not exist.
 
-- [ ] **Step 3: Add schema and data migrations**
+- [x] **Step 3: Add schema and data migrations**
 
 `000004` adds `visibility TINYINT NOT NULL DEFAULT 1` and nullable `published_at` to `videos`, then creates the six community tables using InnoDB, `utf8mb4_unicode_ci`, foreign keys, composite unique/primary keys, count checks, and list indexes. Its Down section drops dependent tables before the two video columns.
 
@@ -63,7 +63,7 @@ ON DUPLICATE KEY UPDATE video_id = VALUES(video_id);
 
 Its Down section is an explicitly documented no-op because published timestamps cannot safely be distinguished from values created after deployment.
 
-- [ ] **Step 4: Add matching Go models and run GREEN**
+- [x] **Step 4: Add matching Go models and run GREEN**
 
 Add `VisibilityPublic=1`, `VisibilityPrivate=2`, `VideoStats`, `Like`, `Favorite`, `Comment`, `WatchHistory`, and `Follow` models with explicit `TableName()` methods. Run:
 
@@ -73,7 +73,7 @@ Add `VisibilityPublic=1`, `VisibilityPrivate=2`, `VideoStats`, `Like`, `Favorite
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the schema checkpoint**
+- [x] **Step 5: Commit the schema checkpoint**
 
 ```bash
 git add backend/migrations backend/internal/video/model.go backend/internal/engagement/model.go backend/internal/follow/model.go backend/internal/database/community_migrate_integration_test.go
