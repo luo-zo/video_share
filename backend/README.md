@@ -46,7 +46,9 @@ backend/
 │   ├── user/                 # 用户模型、仓储、服务、Handler 和 DTO
 │   └── video/                # 视频模型、投稿流程、HLS 输出和接口
 ├── migrations/               # users、videos、转码任务、互动和 outbox 表
-├── scripts/e2e-transcode.ps1 # 完整转码链路验收脚本
+├── scripts/                  # 端到端验收脚本
+│   ├── e2e-transcode.ps1     # 完整转码链路验收
+│   └── e2e-community.ps1     # 社区互动闭环验收
 ├── docs/                     # 第三阶段前后端接口约定
 ├── deploy/docker-compose.yml
 ├── Dockerfile
@@ -177,7 +179,10 @@ go vet ./...
 go build ./...
 docker compose --env-file .env -f deploy/docker-compose.yml config --quiet
 ./scripts/e2e-transcode.ps1
+./scripts/e2e-community.ps1
 ```
+
+`scripts/e2e-community.ps1` 需要 api 与 worker 已经启动，会创建临时用户和投稿，覆盖搜索、点赞、收藏、评论、观看历史与关注，并在结束时清理自己创建的数据。可用 `-BaseUrl` 覆盖默认地址 `http://127.0.0.1:8081`。
 
 集成测试需要设置 `TEST_MYSQL_DSN`。测试会创建独立临时数据库并在结束时删除，不会操作业务库。
 
