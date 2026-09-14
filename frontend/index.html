@@ -109,7 +109,7 @@
             <nav class="app-nav" aria-label="视频功能">
               <button type="button" class="app-nav-button is-active" data-app-view="discover" aria-current="page">发现</button>
               <button type="button" class="app-nav-button" data-app-view="upload">投稿</button>
-              <button type="button" class="app-nav-button" data-app-view="mine">我的投稿</button>
+              <button type="button" class="app-nav-button" data-app-view="mine">我的</button>
             </nav>
             <button id="signout" type="button" class="signout-button">退出</button>
           </header>
@@ -118,13 +118,24 @@
           <div id="app-content" class="app-content">
             <section id="discover-panel" class="app-panel" data-app-panel="discover" aria-labelledby="discover-title">
               <div class="panel-heading"><div><span class="panel-kicker">FRESH FROM THE WORLD</span><h2 id="discover-title" tabindex="-1">发现新鲜故事</h2><p>看看大家最近按下了哪一帧。</p></div><button id="refresh-discover" type="button" class="soft-button">刷新</button></div>
-              <div id="discover-list" class="video-grid" aria-live="polite"></div>
-              <div id="discover-pagination" class="pagination" hidden><button type="button" id="discover-prev">上一页</button><span id="discover-page"></span><button type="button" id="discover-next">下一页</button></div>
+              <div class="discover-tools">
+                <div id="discover-search"></div>
+                <p id="discover-summary" class="discover-summary" aria-live="polite"></p>
+              </div>
+              <div id="discover-list" class="list-mount" aria-live="polite"></div>
+              <div id="discover-pagination" class="pagination-mount"></div>
             </section>
 
             <section id="detail-panel" class="app-panel detail-panel" data-app-panel="detail" aria-labelledby="detail-title" hidden>
               <button id="detail-back" type="button" class="text-button detail-back"><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg>返回发现</button>
               <div id="video-detail" class="video-detail"></div>
+              <div id="detail-actions" class="detail-actions" hidden></div>
+              <div id="detail-owner" class="detail-owner" hidden></div>
+              <section id="detail-comments" class="detail-comments" aria-labelledby="detail-comments-title" hidden>
+                <h3 id="detail-comments-title" class="comments-heading">评论</h3>
+                <div id="detail-comment-composer"></div>
+                <div id="detail-comment-list"></div>
+              </section>
             </section>
 
             <section id="upload-panel" class="app-panel" data-app-panel="upload" aria-labelledby="upload-title" hidden>
@@ -143,9 +154,10 @@
             </section>
 
             <section id="mine-panel" class="app-panel" data-app-panel="mine" aria-labelledby="mine-title" hidden>
-              <div class="panel-heading"><div><span class="panel-kicker">YOUR SCREENING ROOM</span><h2 id="mine-title" tabindex="-1">我的投稿</h2><p>从等待上传到正式放映，每一步都看得见。</p></div><button id="refresh-mine" type="button" class="soft-button">刷新</button></div>
-              <div id="mine-list" class="video-grid mine-grid" aria-live="polite"></div>
-              <div id="mine-pagination" class="pagination" hidden><button type="button" id="mine-prev">上一页</button><span id="mine-page"></span><button type="button" id="mine-next">下一页</button></div>
+              <div class="panel-heading"><div><span class="panel-kicker">YOUR SCREENING ROOM</span><h2 id="mine-title" tabindex="-1">我的</h2><p>投稿、收藏、历史与关注，都收在这里。</p></div><button id="refresh-mine" type="button" class="soft-button">刷新</button></div>
+              <div id="mine-tabs" class="profile-tabs-mount"></div>
+              <div id="mine-list" class="list-mount" aria-live="polite"></div>
+              <div id="mine-pagination" class="pagination-mount"></div>
             </section>
           </div>
         </div>

@@ -16,6 +16,10 @@ const staticFiles = new Map([
   ['/src/cat.js', ['src/cat.js', 'text/javascript; charset=utf-8']],
   ['/src/video.js', ['src/video.js', 'text/javascript; charset=utf-8']],
   ['/src/community.js', ['src/community.js', 'text/javascript; charset=utf-8']],
+  ['/src/view-kit.js', ['src/view-kit.js', 'text/javascript; charset=utf-8']],
+  ['/src/discover-view.js', ['src/discover-view.js', 'text/javascript; charset=utf-8']],
+  ['/src/detail-view.js', ['src/detail-view.js', 'text/javascript; charset=utf-8']],
+  ['/src/profile-view.js', ['src/profile-view.js', 'text/javascript; charset=utf-8']],
   ['/src/player.js', ['src/player.js', 'text/javascript; charset=utf-8']],
   ['/vendor/hls.mjs', ['node_modules/hls.js/dist/hls.mjs', 'text/javascript; charset=utf-8']],
 ]);
