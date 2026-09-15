@@ -171,11 +171,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .account-details dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
 .account-message { font-size: 12px; color: var(--muted); line-height: 1.8; }
 
-.page-shell.app-mode { max-width: 1600px; }
-.page-shell.app-mode .main-layout { display: block; min-height: 700px; }
+.page-shell.app-mode { width: 100%; max-width: none; min-height: 100svh; padding: 0 clamp(16px, 1.6vw, 32px); }
+.page-shell.app-mode .site-header { height: 82px; }
+.page-shell.app-mode .main-layout { display: block; min-height: calc(100svh - 138px); border-radius: 22px; }
 .page-shell.app-mode .universe, .page-shell.app-mode .login-section-index { display: none; }
-.page-shell.app-mode .login-section { display: block; min-height: 700px; padding: 0; border-radius: 27px; background: var(--surface); }
-.page-shell.app-mode .account-view { max-width: none; min-height: 700px; text-align: left; }
+.page-shell.app-mode .login-section { display: block; min-height: calc(100svh - 138px); padding: 0; border-radius: 21px; background: var(--surface); }
+.page-shell.app-mode .account-view { display: flex; flex-direction: column; max-width: none; min-height: calc(100svh - 138px); text-align: left; }
+.page-shell.app-mode .app-content { flex: 1; padding: clamp(30px, 2.2vw, 52px) clamp(28px, 2.6vw, 64px) 42px; }
+.page-shell.app-mode .site-footer { min-height: 56px; padding-top: 8px; padding-bottom: 8px; }
 .app-header { display: grid; grid-template-columns: minmax(190px, auto) 1fr auto; align-items: center; gap: 24px; min-height: 92px; padding: 18px 30px; border-bottom: 1px solid var(--line); }
 .app-identity { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .app-identity > span:last-child { display: flex; flex-direction: column; min-width: 0; }
@@ -220,6 +223,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .status-failed { color: #8d302b; background: #f4ddd6; }
 .video-card-title { display: -webkit-box; margin-top: 16px; overflow: hidden; font: 600 16px/1.5 var(--display); letter-spacing: -.2px; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .video-card-description { display: -webkit-box; margin-top: 7px; overflow: hidden; color: var(--muted); font-size: 10px; line-height: 1.7; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.video-card-stats { margin-top: 10px; color: #839078; font-size: 9px; line-height: 1.6; }
 .processing-progress { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; margin-top: 13px; }
 .processing-track { height: 6px; overflow: hidden; border-radius: 999px; background: #dfe6d3; }
 .processing-fill { display: block; width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #8aa254, #c7df77); transition: width .35s ease; }
@@ -414,6 +418,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   .main-layout { min-height: 810px; }
   .hero-heading { padding-top: 133px; }
   .login-content, .account-view { max-width: 386px; }
+  .page-shell.app-mode .main-layout,
+  .page-shell.app-mode .login-section,
+  .page-shell.app-mode .account-view { min-height: calc(100svh - 138px); }
+  .page-shell.app-mode .video-card { grid-template-columns: clamp(170px, 28%, 280px) minmax(0, 1fr); min-height: clamp(180px, 13vw, 230px); }
+  .page-shell.app-mode .video-card-art { min-height: clamp(180px, 13vw, 230px); }
+  .page-shell.app-mode .video-card-content { padding: 23px 22px 19px; }
+  .page-shell.app-mode .video-card-title { font-size: 18px; }
 }
 @media (max-width: 1200px) {
   .page-shell { padding: 0 28px; }
@@ -451,6 +462,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 }
 @media (max-width: 780px) {
   .page-shell { max-width: 600px; padding: 0 20px; }
+  .page-shell.app-mode { padding: 0 16px; }
+  .page-shell.app-mode .site-header { height: 80px; }
+  .page-shell.app-mode .site-footer { min-height: 69px; }
   .site-header { height: 80px; }
   .brand-word { font-size: 24px; }
   .brand-icon { width: 34px; height: 34px; border-radius: 10px; }

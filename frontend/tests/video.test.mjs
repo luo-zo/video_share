@@ -72,6 +72,24 @@ test('searches public discovery and public detail without a session token', asyn
   }
 });
 
+test('reads public detail with the optional bearer session to receive viewer state', async () => {
+  const queue = [];
+  const calls = [];
+  const apiFetch = async (url, options) => {
+    calls.push({ url, options });
+    return queue.shift();
+  };
+  const { auth, video } = authenticatedClient(apiFetch);
+  await signIn(auth, queue);
+  queue.push(jsonResponse({ data: {
+    id: 1, title: '第一帧', status: 'ready', play_url: '/media/1.mp4',
+    viewer_state: { liked: true, favorited: false, following_author: false },
+  } }));
+
+  assert.equal((await video.getVideo(1)).viewer_state.liked, true);
+  assert.equal(calls[2].options.headers.Authorization, 'Bearer session-token');
+});
+
 test('lists and reads current-user video detail with bearer session requests', async () => {
   const queue = [];
   const calls = [];

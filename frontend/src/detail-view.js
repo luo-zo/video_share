@@ -22,9 +22,18 @@ export function relationFromServer(server, fallback) {
   return { active: Boolean(server.active), count: Number.isFinite(count) ? count : baseCount };
 }
 
+export async function withCleanupOnFailure(operation, cleanup) {
+  try {
+    return await operation();
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+}
+
 export function shouldReportWatch({ lastReportedMs = 0, positionMs = 0, durationMs = 0 } = {}) {
   const duration = Number(durationMs);
-  if (!Number.isFinite(duration) || duration <= 0) return false;
+  if (!Number.isFinite(duration) || duration < 0) return false;
   const elapsed = Number(positionMs) - Number(lastReportedMs);
   return Number.isFinite(elapsed) && elapsed >= WATCH_REPORT_INTERVAL_MS;
 }
@@ -33,8 +42,8 @@ export function shouldReportWatch({ lastReportedMs = 0, positionMs = 0, duration
 export function watchPayload(progressMs, durationMs) {
   const progress = Math.floor(Number(progressMs));
   const duration = Math.floor(Number(durationMs));
-  if (!Number.isFinite(progress) || !Number.isFinite(duration) || progress < 0 || duration <= 0) return null;
-  return { progress_ms: Math.min(progress, duration), duration_ms: duration };
+  if (!Number.isFinite(progress) || !Number.isFinite(duration) || progress < 0 || duration < 0) return null;
+  return { progress_ms: duration > 0 ? Math.min(progress, duration) : progress, duration_ms: duration };
 }
 
 export function commentDraft(raw, { submitting = false } = {}) {
@@ -75,9 +84,12 @@ function followButton({ active, userId }) {
   });
 }
 
-export function actionBar(detail) {
+export function actionBar(detail, viewerId = null) {
   const stats = detail?.stats || {};
   const viewer = detail?.viewer_state || {};
+  const authorId = Number(detail?.author?.id ?? detail?.user_id);
+  const ownVideo = viewerId !== null && viewerId !== undefined
+    && Number.isFinite(Number(viewerId)) && Number(viewerId) === authorId;
   return element('div', {
     className: 'action-bar',
     children: [
@@ -93,7 +105,7 @@ export function actionBar(detail) {
         active: Boolean(viewer.favorited),
         count: statCount(stats, 'favorite_count'),
       }),
-      followButton({ active: Boolean(viewer.following_author), userId: detail?.author?.id }),
+      ownVideo ? null : followButton({ active: Boolean(viewer.following_author), userId: detail?.author?.id }),
     ],
   });
 }

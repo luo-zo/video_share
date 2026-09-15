@@ -182,7 +182,7 @@ docker compose --env-file .env -f deploy/docker-compose.yml config --quiet
 ./scripts/e2e-community.ps1
 ```
 
-`scripts/e2e-community.ps1` 需要 api 与 worker 已经启动，会创建临时用户和投稿，覆盖搜索、点赞、收藏、评论、观看历史与关注，并在结束时清理自己创建的数据。可用 `-BaseUrl` 覆盖默认地址 `http://127.0.0.1:8081`。
+`scripts/e2e-community.ps1` 需要 api 与 worker 已经启动，会创建临时用户和投稿，覆盖搜索、点赞、收藏、评论、观看历史与关注，并在结束或中途失败时尽力取消可逆互动、软删除自己创建的视频。项目目前没有删除账号和观看记录的接口，因此临时测试账号与观看记录会保留。可用 `-BaseUrl` 覆盖默认地址 `http://127.0.0.1:8081`；复用已有视频时，脚本会通过 `-VideoOwnerToken` 读取真实作者身份用于关注和状态断言。
 
 集成测试需要设置 `TEST_MYSQL_DSN`。测试会创建独立临时数据库并在结束时删除，不会操作业务库。
 

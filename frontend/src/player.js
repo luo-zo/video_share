@@ -34,17 +34,24 @@ export async function attachVideoSource(video, item, {
   const Hls = module?.default;
   if (Hls && typeof Hls.isSupported === 'function' && Hls.isSupported()) {
     const hls = new Hls({ enableWorker: false });
-    if (Hls.Events?.ERROR && typeof hls.on === 'function') {
-      hls.on(Hls.Events.ERROR, (_event, data) => onError({
-        fatal: Boolean(data?.fatal),
-        type: data?.type || '',
-        details: data?.details || '',
-        status: Number(data?.response?.code) || 0,
-        reason: data?.reason || data?.error?.message || '',
-      }));
+    try {
+      if (Hls.Events?.ERROR && typeof hls.on === 'function') {
+        hls.on(Hls.Events.ERROR, (_event, data) => onError({
+          fatal: Boolean(data?.fatal),
+          type: data?.type || '',
+          details: data?.details || '',
+          status: Number(data?.response?.code) || 0,
+          reason: data?.reason || data?.error?.message || '',
+        }));
+      }
+      hls.loadSource(item.play_url);
+      hls.attachMedia(video);
+    } catch {
+      hls.destroy?.();
+      throw new VideoError('HLS 播放器初始化失败，请刷新页面后重试。', {
+        code: 'HLS_PLAYER_INIT_FAILED',
+      });
     }
-    hls.loadSource(item.play_url);
-    hls.attachMedia(video);
     return () => hls.destroy();
   }
   if (nativeHLS) return attachDirectly();

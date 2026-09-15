@@ -5,6 +5,7 @@ import { renderNode } from '../src/view-kit.js';
 import {
   WATCH_REPORT_INTERVAL_MS, actionBar, commentComposer, commentDate, commentDraft, commentList,
   optimisticRelation, relationFromServer, shouldReportWatch, watchPayload,
+  withCleanupOnFailure,
 } from '../src/detail-view.js';
 import { collectAttrs, collectText, fakeDocument } from './support/dom-stub.mjs';
 
@@ -35,6 +36,15 @@ test('a failed optimistic toggle rolls back to the untouched snapshot', () => {
   assert.deepEqual(snapshot, { active: true, count: 5 });
 });
 
+test('detail resource setup cleans earlier listeners when a later step fails', async () => {
+  let cleaned = 0;
+  await assert.rejects(withCleanupOnFailure(
+    async () => { throw new Error('attach failed'); },
+    () => { cleaned += 1; },
+  ), /attach failed/);
+  assert.equal(cleaned, 1);
+});
+
 test('the server response replaces the optimistic guess', () => {
   assert.deepEqual(relationFromServer({ active: true, count: 9 }, { active: false, count: 8 }), { active: true, count: 9 });
   assert.deepEqual(relationFromServer({ active: true }, { active: false, count: 8 }), { active: true, count: 8 });
@@ -46,14 +56,20 @@ test('watch reports are throttled to the configured interval', () => {
   assert.equal(shouldReportWatch({ lastReportedMs: 0, positionMs: WATCH_REPORT_INTERVAL_MS, durationMs: 60_000 }), true);
   assert.equal(shouldReportWatch({ lastReportedMs: 20_000, positionMs: 30_000, durationMs: 60_000 }), false);
   assert.equal(shouldReportWatch({ lastReportedMs: 20_000, positionMs: 35_000, durationMs: 60_000 }), true);
-  assert.equal(shouldReportWatch({ lastReportedMs: 0, positionMs: 5_000, durationMs: 0 }), false);
+  assert.equal(shouldReportWatch({ lastReportedMs: 0, positionMs: WATCH_REPORT_INTERVAL_MS, durationMs: 0 }), true);
 });
 
 test('a watch payload clamps progress to the reported duration', () => {
   assert.deepEqual(watchPayload(1_200, 1_000), { progress_ms: 1_000, duration_ms: 1_000 });
   assert.deepEqual(watchPayload(500.9, 60_000.9), { progress_ms: 500, duration_ms: 60_000 });
   assert.equal(watchPayload(-1, 60_000), null);
-  assert.equal(watchPayload(10, 0), null);
+  assert.deepEqual(watchPayload(10, 0), { progress_ms: 10, duration_ms: 0 });
+});
+
+test('authors never receive a follow button for themselves', () => {
+  const bar = actionBar(detail(), 4);
+  assert.equal(bar.children.some((child) => child.dataset?.action === 'follow'), false);
+  assert.equal(actionBar(detail(), 7).children.some((child) => child.dataset?.action === 'follow'), true);
 });
 
 test('a comment draft validates its content and locks only while pending', () => {

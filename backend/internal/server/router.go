@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -54,7 +55,17 @@ func NewRouter(cfg *config.Config, db *gorm.DB, log *slog.Logger, tm *token.Mana
 	r.GET("/readyz", readinessHandler(db, log))
 
 	rateLimiter := middleware.NewRateLimiter(cfg.RateLimitPerSecond, cfg.RateLimitBurst, 10000)
-	requireAuth := middleware.Auth(tm)
+	validateUser := func(ctx context.Context, userID uint64) (bool, error) {
+		u, err := userRepo.FindByID(ctx, userID)
+		if errors.Is(err, user.ErrNotFound) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		return u.Status == user.StatusNormal, nil
+	}
+	requireAuth := middleware.Auth(tm, validateUser)
 
 	api := r.Group("/api/v1")
 	auth := api.Group("/auth")
@@ -68,7 +79,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB, log *slog.Logger, tm *token.Mana
 	api.GET("/videos", videoHandler.List)
 	api.GET("/videos/:id/cover", videoHandler.Cover)
 	api.GET("/videos/:id/hls/*path", videoHandler.HLS)
-	api.GET("/videos/:id", middleware.OptionalAuth(tm), videoHandler.Detail)
+	api.GET("/videos/:id", middleware.OptionalAuth(tm, validateUser), videoHandler.Detail)
 	api.GET("/videos/:id/comments", engagementHandler.ListComments)
 
 	// 需要登录的写端点。
@@ -80,7 +91,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB, log *slog.Logger, tm *token.Mana
 	api.DELETE("/videos/:id/like", requireAuth, engagementHandler.Unlike)
 	api.PUT("/videos/:id/favorite", requireAuth, engagementHandler.Favorite)
 	api.DELETE("/videos/:id/favorite", requireAuth, engagementHandler.Unfavorite)
-	api.POST("/videos/:id/watch", requireAuth, engagementHandler.RecordWatch)
+	api.POST("/videos/:id/watch", requireAuth, bodyLimit, engagementHandler.RecordWatch)
 
 	api.GET("/users/me/videos", requireAuth, videoHandler.Mine)
 	api.GET("/users/me/videos/:id", requireAuth, videoHandler.MineDetail)

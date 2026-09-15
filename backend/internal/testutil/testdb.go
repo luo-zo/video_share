@@ -7,11 +7,14 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/go-sql-driver/mysql"
 )
+
+// testDBCounter 保证同一进程内连续创建的测试库永不重名。
+var testDBCounter atomic.Uint64
 
 // MySQLDSN 连接到 TEST_MYSQL_DSN 指定的 MySQL 服务器，为本次测试运行创建一个
 // 唯一命名的数据库，并返回指向它的 DSN。清理时会删除该数据库（并暴露任何失败）。
@@ -41,7 +44,9 @@ func MySQLDSN(t *testing.T) string {
 		t.Fatalf("ping admin connection: %v", err)
 	}
 
-	name := fmt.Sprintf("video_share_test_%d", time.Now().UnixNano())
+	// 时间戳在 Windows 上精度很粗，`go test` 又会并行跑多个包，只靠纳秒会让两个包
+	// 落在同一时钟刻度上撞名并得到 Error 1007。进程 ID 区分并行包，序号区分同进程调用。
+	name := fmt.Sprintf("video_share_test_%d_%d", os.Getpid(), testDBCounter.Add(1))
 	if _, err := admin.Exec("CREATE DATABASE `" + name + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"); err != nil {
 		_ = admin.Close()
 		t.Fatalf("create test database: %v", err)

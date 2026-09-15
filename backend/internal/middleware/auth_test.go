@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,9 +16,13 @@ import (
 )
 
 func setupAuthRouter(tm *token.Manager) *gin.Engine {
+	return setupAuthRouterWithValidator(tm, func(context.Context, uint64) (bool, error) { return true, nil })
+}
+
+func setupAuthRouterWithValidator(tm *token.Manager, validate UserValidator) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.GET("/protected", Auth(tm), func(c *gin.Context) {
+	r.GET("/protected", Auth(tm, validate), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"uid": c.GetUint64(UserIDKey)})
 	})
 	return r
@@ -127,12 +133,69 @@ func TestAuthRejectsWrongAlgorithm(t *testing.T) {
 }
 
 func setupOptionalAuthRouter(tm *token.Manager) *gin.Engine {
+	return setupOptionalAuthRouterWithValidator(tm, func(context.Context, uint64) (bool, error) { return true, nil })
+}
+
+func setupOptionalAuthRouterWithValidator(tm *token.Manager, validate UserValidator) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.GET("/public", OptionalAuth(tm), func(c *gin.Context) {
+	r.GET("/public", OptionalAuth(tm, validate), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"uid": c.GetUint64(UserIDKey)})
 	})
 	return r
+}
+
+func TestAuthRejectsMissingOrDisabledTokenSubject(t *testing.T) {
+	tm := token.NewManager("secret", "video-share", time.Hour)
+	tok, _, _ := tm.Generate(99)
+	r := setupAuthRouterWithValidator(tm, func(_ context.Context, id uint64) (bool, error) {
+		if id != 99 {
+			t.Fatalf("validator id = %d", id)
+		}
+		return false, nil
+	})
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), `"code":"UNAUTHORIZED"`) {
+		t.Fatalf("response = %d %s, want 401 UNAUTHORIZED", w.Code, w.Body.String())
+	}
+}
+
+func TestOptionalAuthTreatsMissingOrDisabledTokenSubjectAsAnonymous(t *testing.T) {
+	tm := token.NewManager("secret", "video-share", time.Hour)
+	tok, _, _ := tm.Generate(99)
+	r := setupOptionalAuthRouterWithValidator(tm, func(context.Context, uint64) (bool, error) { return false, nil })
+	req := httptest.NewRequest(http.MethodGet, "/public", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"uid":0`) {
+		t.Fatalf("response = %d %s, want anonymous", w.Code, w.Body.String())
+	}
+}
+
+func TestAuthValidatorDatabaseErrorsReturn500(t *testing.T) {
+	tm := token.NewManager("secret", "video-share", time.Hour)
+	tok, _, _ := tm.Generate(99)
+	validate := func(context.Context, uint64) (bool, error) { return false, errors.New("database unavailable") }
+	for _, r := range []*gin.Engine{
+		setupAuthRouterWithValidator(tm, validate),
+		setupOptionalAuthRouterWithValidator(tm, validate),
+	} {
+		path := "/protected"
+		if len(r.Routes()) > 0 && r.Routes()[0].Path == "/public" {
+			path = "/public"
+		}
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), `"code":"INTERNAL_ERROR"`) {
+			t.Fatalf("%s response = %d %s, want 500", path, w.Code, w.Body.String())
+		}
+	}
 }
 
 func TestOptionalAuthTreatsMissingHeaderAsAnonymous(t *testing.T) {

@@ -76,6 +76,13 @@ test('a hostile title stays inert text and never becomes an attribute', () => {
   assert.ok(collectAttrs(node).every((value) => !value.includes(XSS)));
 });
 
+test('discovery cards show comment counts alongside likes and plays', () => {
+  const node = renderNode(discoverGrid({ items: [video({ stats: {
+    view_count: 3, like_count: 2, favorite_count: 1, comment_count: 7,
+  } })] }), fakeDocument());
+  assert.match(collectText(node), /7 评论/);
+});
+
 test('empty results render a readable empty state', () => {
   const document = fakeDocument();
   const node = renderNode(discoverGrid({ items: [], total: 0 }), document);

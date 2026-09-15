@@ -5,6 +5,7 @@ package follow
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"gorm.io/driver/mysql"
@@ -159,6 +160,46 @@ func TestFollowGraphTransactions(t *testing.T) {
 		if got := followRowCount(t, db, alice, bob); got != 0 {
 			t.Fatalf("rows = %d, want 0", got)
 		}
+	})
+
+	t.Run("concurrent duplicate follow and unfollow return current states", func(t *testing.T) {
+		db := openFollowTestDB(t)
+		alice, bob, _, _ := seedFollowUsers(t, db)
+		repo := NewRepository(db)
+		const workers = 8
+
+		run := func(active bool) {
+			t.Helper()
+			states := make(chan *FollowState, workers)
+			errs := make(chan error, workers)
+			var wg sync.WaitGroup
+			for i := 0; i < workers; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					state, err := repo.SetFollow(ctx, alice, bob, active)
+					if err != nil {
+						errs <- err
+						return
+					}
+					states <- state
+				}()
+			}
+			wg.Wait()
+			close(errs)
+			close(states)
+			for err := range errs {
+				t.Fatalf("SetFollow(%v): %v", active, err)
+			}
+			for state := range states {
+				if state.Following != active {
+					t.Fatalf("SetFollow(%v) state = %+v", active, state)
+				}
+			}
+		}
+
+		run(true)
+		run(false)
 	})
 
 	t.Run("following a missing user is not found", func(t *testing.T) {

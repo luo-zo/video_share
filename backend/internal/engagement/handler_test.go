@@ -258,6 +258,27 @@ func TestWatchHandlerReportsProgress(t *testing.T) {
 	}
 }
 
+func TestEngagementJSONHandlersReturn413ForOversizedBodies(t *testing.T) {
+	h := newHandlerForTest(&mockRepository{})
+	r := gin.New()
+	limit := middleware.LimitBody(32 * 1024)
+	r.POST("/videos/:id/comments", withUserID(7), limit, h.CreateComment)
+	r.POST("/videos/:id/watch", withUserID(7), limit, h.RecordWatch)
+
+	for _, tc := range []struct {
+		path string
+		body string
+	}{
+		{"/videos/9/comments", `{"content":"` + strings.Repeat("x", 40*1024) + `"}`},
+		{"/videos/9/watch", `{"padding":"` + strings.Repeat("x", 40*1024) + `","progress_ms":1}`},
+	} {
+		w := performJSON(r, http.MethodPost, tc.path, tc.body)
+		if w.Code != http.StatusRequestEntityTooLarge || !strings.Contains(w.Body.String(), `"code":"REQUEST_TOO_LARGE"`) {
+			t.Fatalf("POST %s = %d %s, want 413 REQUEST_TOO_LARGE", tc.path, w.Code, w.Body.String())
+		}
+	}
+}
+
 func TestPersonalListHandlersRequireUserAndMapVideos(t *testing.T) {
 	repo := &mockRepository{}
 	repo.listFavoritesFn = func(_ context.Context, userID uint64, page, pageSize int) ([]video.Video, int64, error) {

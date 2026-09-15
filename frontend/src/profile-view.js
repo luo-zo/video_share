@@ -22,8 +22,9 @@ const EMPTY_STATES = Object.freeze({
 });
 const VISIBILITIES = Object.freeze(['public', 'private']);
 const VISIBILITY_LABELS = Object.freeze({ public: '公开', private: '私密' });
-const TITLE_MIN_LENGTH = 2;
-const TITLE_MAX_LENGTH = 120;
+const TITLE_MIN_LENGTH = 1;
+const TITLE_MAX_LENGTH = 100;
+const DESCRIPTION_MAX_LENGTH = 2000;
 
 export function normalizeTab(tab) {
   const value = String(tab ?? '');
@@ -55,16 +56,29 @@ export function tabList(activeTab) {
 }
 
 // 校验和取值都基于同一份裁剪后的 values，调用方直接把它当补丁提交即可。
-export function ownerPatch(fields = {}) {
-  const values = {
+export function ownerPatch(fields = {}, original = null) {
+  const normalized = {
     title: String(fields.title ?? '').trim(),
     description: String(fields.description ?? '').trim(),
     visibility: String(fields.visibility ?? '').trim(),
   };
   const errors = {};
-  if (values.title.length < TITLE_MIN_LENGTH) errors.title = `标题至少需要 ${TITLE_MIN_LENGTH} 个字符`;
-  if (values.title.length > TITLE_MAX_LENGTH) errors.title = `标题最多 ${TITLE_MAX_LENGTH} 个字符`;
-  if (!VISIBILITIES.includes(values.visibility)) errors.visibility = '可见性只能是 public 或 private';
+  const titleLength = Array.from(normalized.title).length;
+  if (titleLength < TITLE_MIN_LENGTH) errors.title = `标题至少需要 ${TITLE_MIN_LENGTH} 个字符`;
+  if (titleLength > TITLE_MAX_LENGTH) errors.title = `标题最多 ${TITLE_MAX_LENGTH} 个字符`;
+  if (Array.from(normalized.description).length > DESCRIPTION_MAX_LENGTH) {
+    errors.description = `简介最多 ${DESCRIPTION_MAX_LENGTH} 个字符`;
+  }
+  if (!VISIBILITIES.includes(normalized.visibility)) errors.visibility = '可见性只能是 public 或 private';
+  let values = normalized;
+  if (original && typeof original === 'object') {
+    values = Object.fromEntries(Object.entries(normalized).filter(([key, value]) => (
+      value !== String(original[key] ?? '').trim()
+    )));
+    if (Object.keys(values).length === 0 && Object.keys(errors).length === 0) {
+      errors.form = '没有需要保存的修改';
+    }
+  }
   return { valid: Object.keys(errors).length === 0, values, errors };
 }
 
@@ -95,7 +109,7 @@ export function ownerEditForm(video) {
       element('textarea', {
         className: 'owner-description',
         id: 'owner-description',
-        attrs: { name: 'description', rows: 3 },
+        attrs: { name: 'description', rows: 3, maxlength: DESCRIPTION_MAX_LENGTH },
         props: { value: video?.description || '' },
       }),
       element('label', { attrs: { for: 'owner-visibility' }, text: '可见性' }),
@@ -153,7 +167,7 @@ function videoCard(video) {
       video?.description ? element('span', { className: 'profile-card-description', text: video.description }) : null,
       element('span', {
         className: 'profile-card-stats',
-        text: `${Number(stats.like_count) || 0} 赞 · ${Number(stats.view_count) || 0} 播放`,
+        text: `${Number(stats.like_count) || 0} 赞 · ${Number(stats.view_count) || 0} 播放 · ${Number(stats.comment_count) || 0} 评论`,
       }),
       element('button', {
         className: 'profile-card-open',

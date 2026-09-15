@@ -84,8 +84,7 @@ func (h *Handler) CreateComment(c *gin.Context) {
 		return
 	}
 	var req CommentRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "invalid request body")
+	if !h.bindJSON(c, &req) {
 		return
 	}
 	result, err := h.svc.CreateComment(c.Request.Context(), userID, id, req.Content)
@@ -141,8 +140,7 @@ func (h *Handler) RecordWatch(c *gin.Context) {
 		return
 	}
 	var req WatchRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "invalid request body")
+	if !h.bindJSON(c, &req) {
 		return
 	}
 	if err := h.svc.RecordWatch(c.Request.Context(), userID, id, req.ProgressMS, req.DurationMS); err != nil {
@@ -154,6 +152,20 @@ func (h *Handler) RecordWatch(c *gin.Context) {
 		"progress_ms": req.ProgressMS,
 		"duration_ms": req.DurationMS,
 	})
+}
+
+func (h *Handler) bindJSON(c *gin.Context, dst any) bool {
+	err := c.ShouldBindJSON(dst)
+	if err == nil {
+		return true
+	}
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		response.Error(c, http.StatusRequestEntityTooLarge, response.CodeRequestTooLarge, "request body too large")
+		return false
+	}
+	response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "invalid request body")
+	return false
 }
 
 func (h *Handler) Favorites(c *gin.Context) { h.listPersonal(c, "list favorites", h.svc.ListFavorites) }

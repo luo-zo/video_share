@@ -26,7 +26,14 @@ func newTestRouter(repo Repository, tm *token.Manager) *gin.Engine {
 	r := gin.New()
 	r.POST("/register", h.Register)
 	r.POST("/login", h.Login)
-	r.GET("/me", middleware.Auth(tm), h.Me)
+	validate := func(ctx context.Context, id uint64) (bool, error) {
+		u, err := repo.FindByID(ctx, id)
+		if err != nil {
+			return false, err
+		}
+		return u.Status == StatusNormal, nil
+	}
+	r.GET("/me", middleware.Auth(tm, validate), h.Me)
 	return r
 }
 
@@ -176,8 +183,8 @@ func TestMeHandlerDisabled(t *testing.T) {
 	w := doJSON(r, http.MethodGet, "/me", "", func(req *http.Request) {
 		req.Header.Set("Authorization", "Bearer "+tok)
 	})
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", w.Code)
 	}
 }
 

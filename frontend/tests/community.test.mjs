@@ -135,7 +135,6 @@ test('reports watch progress and rejects impossible progress values', async () =
     { progressMs: 20000, durationMs: 10000 },
     { progressMs: -1, durationMs: 10000 },
     { progressMs: 1.5, durationMs: 10000 },
-    { progressMs: 3000, durationMs: 0 },
   ]) {
     await assert.rejects(community.reportWatch(9, bad), (error) => {
       assert.ok(error instanceof CommunityError);
@@ -144,6 +143,22 @@ test('reports watch progress and rejects impossible progress values', async () =
     });
   }
   assert.equal(calls.length, 3);
+});
+
+test('reports watch progress while media duration is still unknown', async () => {
+  const queue = [];
+  const calls = [];
+  const apiFetch = async (url, options) => {
+    calls.push({ url, options });
+    return queue.shift();
+  };
+  const { auth, community } = connectedClient(apiFetch);
+  await signIn(auth, queue);
+  queue.push(jsonResponse({ data: { video_id: 9, progress_ms: 3000, duration_ms: 0 } }));
+
+  assert.equal((await community.reportWatch(9, { progressMs: 3000, durationMs: 0, keepalive: true })).duration_ms, 0);
+  assert.deepEqual(JSON.parse(calls[2].options.body), { progress_ms: 3000, duration_ms: 0 });
+  assert.equal(calls[2].options.keepalive, true);
 });
 
 test('lists favorites, history and follows with pagination', async () => {

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -13,9 +14,12 @@ import (
 // UserIDKey 是保存已认证用户 ID 的上下文键。
 const UserIDKey = "user_id"
 
-// Auth 校验 Bearer 令牌，并将已认证的用户 ID 存入上下文。
-// 它不检查用户是否存在或状态——那是处理器的职责。
-func Auth(tm *token.Manager) gin.HandlerFunc {
+// UserValidator checks that a token subject still maps to an enabled account.
+// The boolean distinguishes an inactive/missing account from a database failure.
+type UserValidator func(ctx context.Context, userID uint64) (bool, error)
+
+// Auth 校验 Bearer 令牌和令牌主体对应的账号状态，再将用户 ID 存入上下文。
+func Auth(tm *token.Manager, validate UserValidator) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authz := c.GetHeader("Authorization")
 		if authz == "" {
@@ -32,17 +36,35 @@ func Auth(tm *token.Manager) gin.HandlerFunc {
 			response.Error(c, http.StatusUnauthorized, response.CodeUnauthorized, "invalid or expired token")
 			return
 		}
+		active, err := validate(c.Request.Context(), claims.UserID)
+		if err != nil {
+			response.Error(c, http.StatusInternalServerError, response.CodeInternal, "internal server error")
+			return
+		}
+		if !active {
+			response.Error(c, http.StatusUnauthorized, response.CodeUnauthorized, "invalid or expired token")
+			return
+		}
 		c.Set(UserIDKey, claims.UserID)
 		c.Next()
 	}
 }
 
-// OptionalAuth 在携带有效 Bearer 令牌时设置 user_id，否则以匿名身份放行。它从不
-// 写出响应，因此同一个公开处理器既能服务匿名访问，也能返回当前用户的互动状态。
-// 无效或过期的令牌按未认证处理，不会泄露错误细节。
-func OptionalAuth(tm *token.Manager) gin.HandlerFunc {
+// OptionalAuth 在携带有效 Bearer 令牌且账号仍可用时设置 user_id。无效、过期、
+// 不存在或已禁用的账号按匿名处理；账号校验发生数据库错误时返回 500。
+func OptionalAuth(tm *token.Manager, validate UserValidator) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if id := bearerUserID(c, tm); id != 0 {
+		id := bearerUserID(c, tm)
+		if id == 0 {
+			c.Next()
+			return
+		}
+		active, err := validate(c.Request.Context(), id)
+		if err != nil {
+			response.Error(c, http.StatusInternalServerError, response.CodeInternal, "internal server error")
+			return
+		}
+		if active {
 			c.Set(UserIDKey, id)
 		}
 		c.Next()

@@ -50,12 +50,13 @@ func (r *gormRepository) SetFollow(ctx context.Context, followerID, followeeID u
 		if err := applyFollow(tx, followerID, followeeID, active); err != nil {
 			return err
 		}
-		var mine int64
-		if err := tx.Model(&Follow{}).Where("follower_id = ? AND followee_id = ?", followerID, followeeID).
-			Count(&mine).Error; err != nil {
+		var rows []Follow
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("follower_id = ? AND followee_id = ?", followerID, followeeID).
+			Limit(1).Find(&rows).Error; err != nil {
 			return fmt.Errorf("check follow: %w", err)
 		}
-		state = FollowState{Following: mine > 0}
+		state = FollowState{Following: len(rows) > 0}
 		return nil
 	})
 	if err != nil {

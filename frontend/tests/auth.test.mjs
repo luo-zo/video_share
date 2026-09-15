@@ -99,6 +99,22 @@ test('login requires a bearer-authenticated profile before committing any sessio
   assert.equal('password' in client.getSession(), false);
 });
 
+test('optional session requests attach bearer only while a session is active', async () => {
+  const { client, calls } = clientWithQueue([
+    response({ data: { id: 1 } }),
+    response({ data: tokenData }), response({ data: user }),
+    response({ data: { id: 2, viewer_state: { liked: true } } }),
+  ]);
+
+  assert.deepEqual(await client.requestWithOptionalSession('/videos/1'), { id: 1 });
+  assert.equal(calls[0].request.headers.Authorization, undefined);
+  await client.signIn(credentials);
+  assert.deepEqual(await client.requestWithOptionalSession('/videos/2'), {
+    id: 2, viewer_state: { liked: true },
+  });
+  assert.equal(calls[3].request.headers.Authorization, 'Bearer test-token');
+});
+
 test('failed profile retrieval never leaves an authenticated session', async () => {
   const { client } = clientWithQueue([
     response({ data: tokenData }),

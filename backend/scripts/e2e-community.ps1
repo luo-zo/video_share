@@ -1,22 +1,22 @@
 ﻿# 第四阶段社区互动验收脚本。
 #
-# 覆盖公开搜索、点赞 / 收藏幂等、评论、观看历史、关注关系、作者编辑与删除，以及
-# 所有可逆关系的取消。任何非预期状态码或字段值都会立即失败。
+# 覆盖公开搜索、播放清单、点赞 / 收藏幂等、评论、观看历史、关注关系、作者编辑与
+# 删除，以及所有可逆关系的取消。任何非预期状态码或字段值都会立即失败。
 #
-# 默认行为：注册两个全新的测试账号，由作者账号现场生成并上传一支短视频。
-# 在 CI 等没有 ffmpeg 的环境里，可以用 -VideoId 加 -VideoOwnerToken 复用一个已经
-# ready 的公开视频，跳过上传，同时仍然完整执行 B 侧的互动与作者侧的编辑 / 删除。
+# 脚本只创建和操作自己生成的数据：注册两个全新的测试账号，由作者账号现场生成、
+# 上传并转码一支短视频，结束时删除该视频。它永远不会读写已有用户的投稿。
 param(
     [string]$BaseUrl = "http://127.0.0.1:8081",
-    [int]$TimeoutSeconds = 180,
-    [uint64]$VideoId = 0,
-    [string]$VideoOwnerToken = ""
+    [int]$TimeoutSeconds = 180
 )
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $tempVideo = Join-Path ([IO.Path]::GetTempPath()) ("video-share-stage4-{0}.mp4" -f [guid]::NewGuid().ToString("N"))
-$createdVideo = $false
+$author = $null
+$video = $null
+$cleanupVideoID = [uint64]0
+$cleanupVideoHeaders = $null
 $skipHttpErrorCheck = $PSVersionTable.PSVersion.Major -ge 6
 
 function Resolve-ApiUrl([string]$Value) {
@@ -59,6 +59,11 @@ function Invoke-Api {
         $response = Invoke-WebRequest @params
         $status = [int]$response.StatusCode
         $content = $response.Content
+        # PowerShell 7 会把 application/vnd.apple.mpegurl 响应保留为 byte[]；
+        # 统一解码成 UTF-8 文本，后面的 JSON 解析与 HLS 断言才能得到真实正文。
+        if ($content -is [byte[]]) {
+            $content = [Text.Encoding]::UTF8.GetString($content)
+        }
     } catch {
         $webResponse = $_.Exception.Response
         if ($null -eq $webResponse) { throw }
@@ -70,13 +75,17 @@ function Invoke-Api {
     if ($ExpectStatus -notcontains $status) {
         throw ("{0} {1} returned {2}, expected {3}. Body: {4}" -f $Method, $Path, $status, ($ExpectStatus -join "/"), $content)
     }
+    # HLS 清单等非 JSON 响应没有可解析的负载，保留原始文本供调用点断言。
     $parsed = $null
-    if (-not [string]::IsNullOrWhiteSpace($content)) { $parsed = $content | ConvertFrom-Json }
+    if (-not [string]::IsNullOrWhiteSpace($content)) {
+        try { $parsed = $content | ConvertFrom-Json } catch { $parsed = $null }
+    }
     return @{ status = $status; data = $parsed; raw = $content }
 }
 
 function New-TestUser([string]$Prefix, [string]$Nickname) {
-    $suffix = [DateTime]::UtcNow.ToString("yyyyMMddHHmmssfff") + ([guid]::NewGuid().ToString("N").Substring(0, 4))
+    # users.username 最长 32 字符；12 位时间戳加 4 位随机串仍给当前前缀留足空间。
+    $suffix = [DateTime]::UtcNow.ToString("yyMMddHHmmss") + ([guid]::NewGuid().ToString("N").Substring(0, 4))
     $username = "{0}_{1}" -f $Prefix, $suffix
     $password = [guid]::NewGuid().ToString("N") + "Aa1!"
     Invoke-Api -Method Post -Path "/api/v1/auth/register" -ExpectStatus 201 -Body @{
@@ -90,18 +99,7 @@ function New-TestUser([string]$Prefix, [string]$Nickname) {
     return @{ username = $username; id = [uint64]$me.data.data.id; headers = $headers }
 }
 
-function New-OrReuseVideo([hashtable]$Author) {
-    if ($VideoId -ne 0) {
-        Assert-True ($VideoOwnerToken -ne "") "-VideoId 需要同时提供 -VideoOwnerToken"
-        $ownerHeaders = @{ Authorization = "Bearer $VideoOwnerToken" }
-        $ownerVideo = Invoke-Api -Method Get -Path "/api/v1/users/me/videos/$VideoId" -Headers $ownerHeaders
-        Assert-Equal $ownerVideo.data.data.status "ready" "复用的视频必须是 ready 状态"
-        $public = Invoke-Api -Method Get -Path "/api/v1/videos/$VideoId"
-        Assert-True ($null -ne $public.data.data) "复用的视频必须可以公开访问"
-        Write-Host "      复用已有视频 video_id=$VideoId"
-        return @{ id = [uint64]$VideoId; headers = $ownerHeaders; title = $public.data.data.title }
-    }
-
+function New-TestVideo([hashtable]$Author) {
     Write-Host "      生成两秒钟的 MP4 测试素材..."
     $localFFmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
     if ($localFFmpeg) {
@@ -124,6 +122,8 @@ function New-OrReuseVideo([hashtable]$Author) {
         file_size = $file.Length
     }
     $id = [uint64]$created.data.data.id
+    $script:cleanupVideoID = $id
+    $script:cleanupVideoHeaders = $Author.headers
     Assert-True ($created.data.data.upload_url.Length -gt 0) "create returns upload_url"
     Invoke-WebRequest -Method Put -Uri $created.data.data.upload_url -InFile $tempVideo -ContentType "video/mp4" -UseBasicParsing | Out-Null
     Invoke-Api -Method Post -Path "/api/v1/videos/$id/complete" -Headers $Author.headers -ExpectStatus 202 | Out-Null
@@ -163,16 +163,19 @@ try {
 
     Write-Host "[2/11] 创建作者账号并准备一支 ready 的公开视频..."
     $author = New-TestUser "stage4_author" "Stage 4 Author"
-    $video = New-OrReuseVideo $author
-    if ($VideoId -eq 0) { $createdVideo = $true }
+    $video = New-TestVideo $author
 
     Write-Host "[3/11] 创建观众账号..."
     $viewer = New-TestUser "stage4_viewer" "Stage 4 Viewer"
     Assert-True ($viewer.id -ne $author.id) "两个测试账号必须不同"
 
-    Write-Host "[4/11] 匿名搜索命中该视频，并验证 LIKE 通配符被转义..."
+    Write-Host "[4/11] 匿名播放、匿名搜索命中，并验证 LIKE 通配符被转义..."
     $anonymous = Invoke-Api -Method Get -Path "/api/v1/videos/$($video.id)"
     Assert-True (-not ($anonymous.data.data.PSObject.Properties.Name -contains "viewer_state")) "匿名详情不应包含 viewer_state"
+    Assert-Equal $anonymous.data.data.play_type "hls" "ready 视频应提供 HLS 播放"
+    Assert-Equal $anonymous.data.data.play_url "/api/v1/videos/$($video.id)/hls/master.m3u8" "play_url 应指向清单代理"
+    $manifest = Invoke-Api -Method Get -Path $anonymous.data.data.play_url
+    Assert-True ($manifest.raw -like "*#EXTM3U*") "匿名请求应能取到 HLS 清单"
     Assert-Equal $anonymous.data.data.stats.like_count 0 "初始点赞数为 0"
     Assert-Equal $anonymous.data.data.stats.favorite_count 0 "初始收藏数为 0"
     Assert-Equal $anonymous.data.data.stats.comment_count 0 "初始评论数为 0"
@@ -183,7 +186,7 @@ try {
     Assert-Equal ([uint64]$found[0].author.id) $author.id "搜索结果作者应与上传者一致"
     Assert-True (-not ($found[0].PSObject.Properties.Name -contains "viewer_state")) "匿名搜索不应包含 viewer_state"
     Assert-Equal (Find-Video -Target $video.id -Query "%").Count 0 "百分号必须按字面匹配"
-    Assert-Equal (Find-Video -Target $video.id -Query "_").Count 0 "下划线必须按字面匹配"
+    Assert-Equal (Find-Video -Target $video.id -Query "_tage4").Count 0 "下划线必须按字面匹配"
 
     Write-Host "[5/11] 验证点赞与收藏的幂等写入..."
     $like = Invoke-Api -Method Put -Path "/api/v1/videos/$($video.id)/like" -Headers $viewer.headers
@@ -249,11 +252,15 @@ try {
     Assert-Equal $patched.data.data.visibility "private" "可见性应更新为 private"
     Assert-Equal $patched.data.data.title "$($video.title) (编辑)" "标题应被更新"
     Invoke-Api -Method Get -Path "/api/v1/videos/$($video.id)" -ExpectStatus 404 | Out-Null
+    Invoke-Api -Method Get -Path "/api/v1/videos/$($video.id)/hls/master.m3u8" -ExpectStatus 404 | Out-Null
+    Invoke-Api -Method Get -Path "/api/v1/videos/$($video.id)/cover" -ExpectStatus 404 | Out-Null
     Assert-Equal (Find-Video -Target $video.id -Query $video.title).Count 0 "私有视频不应出现在公开搜索中"
     $restored = Invoke-Api -Method Patch -Path "/api/v1/users/me/videos/$($video.id)" -Headers $video.headers -Body @{ visibility = "public" }
     Assert-Equal $restored.data.data.visibility "public" "可见性应恢复为 public"
     Assert-Equal (Find-Video -Target $video.id -Query $patched.data.data.title).Count 1 "恢复公开后应可再次被搜索到"
-    Invoke-Api -Method Patch -Path "/api/v1/users/me/videos/$($video.id)" -Headers $viewer.headers -ExpectStatus 403 | Out-Null
+    Invoke-Api -Method Patch -Path "/api/v1/users/me/videos/$($video.id)" -Headers $viewer.headers -Body @{
+        title = "forbidden edit"
+    } -ExpectStatus 403 | Out-Null
 
     Write-Host "[11/11] 取消全部可逆关系、复核计数并清理..."
     $unlike = Invoke-Api -Method Delete -Path "/api/v1/videos/$($video.id)/like" -Headers $viewer.headers
@@ -273,16 +280,24 @@ try {
     $emptyFavorites = Invoke-Api -Method Get -Path "/api/v1/users/me/favorites" -Headers $viewer.headers
     Assert-Equal ([int]$emptyFavorites.data.data.total) 0 "取消收藏后收藏列表应为空"
 
-    if ($createdVideo) {
-        Invoke-Api -Method Delete -Path "/api/v1/users/me/videos/$($video.id)" -Headers $video.headers | Out-Null
-        Invoke-Api -Method Get -Path "/api/v1/videos/$($video.id)" -ExpectStatus 404 | Out-Null
-        Assert-Equal (Find-Video -Target $video.id -Query $video.title).Count 0 "已删除视频不应出现在公开搜索中"
-    }
+    Invoke-Api -Method Delete -Path "/api/v1/users/me/videos/$($video.id)" -Headers $video.headers | Out-Null
+    $cleanupVideoID = [uint64]0
+    $cleanupVideoHeaders = $null
+    Invoke-Api -Method Get -Path "/api/v1/videos/$($video.id)" -ExpectStatus 404 | Out-Null
+    Assert-Equal (Find-Video -Target $video.id -Query $video.title).Count 0 "已删除视频不应出现在公开搜索中"
 
     Write-Host ""
     Write-Host "第四阶段社区互动验收通过。"
     Write-Host ("      video_id={0}, author_id={1}, viewer_id={2}" -f $video.id, $author.id, $viewer.id)
-    if (-not $createdVideo) { Write-Host "      （复用了已有视频，未删除原作者的数据）" }
 } finally {
+    # 无论成功还是中途失败，都尽力软删除本次创建的投稿，避免它继续出现在公开视频列表中。
+    if ($cleanupVideoID -ne 0 -and $null -ne $cleanupVideoHeaders) {
+        try {
+            Invoke-Api -Method Delete -Path "/api/v1/users/me/videos/$cleanupVideoID" -Headers $cleanupVideoHeaders -ExpectStatus @(200, 404) | Out-Null
+            Write-Host "      已清理本次创建的测试视频 video_id=$cleanupVideoID"
+        } catch {
+            Write-Warning ("无法清理本次创建的视频 {0}: {1}" -f $cleanupVideoID, $_.Exception.Message)
+        }
+    }
     Remove-Item -LiteralPath $tempVideo -Force -ErrorAction SilentlyContinue
 }

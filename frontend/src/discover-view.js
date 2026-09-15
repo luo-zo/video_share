@@ -114,7 +114,7 @@ function videoCard(item, index) {
           item?.description ? element('span', { className: 'video-card-description', text: item.description }) : null,
           element('span', {
             className: 'video-card-stats',
-            text: `${Number(stats.like_count) || 0} 赞 · ${Number(stats.view_count) || 0} 播放`,
+            text: `${Number(stats.like_count) || 0} 赞 · ${Number(stats.view_count) || 0} 播放 · ${Number(stats.comment_count) || 0} 评论`,
           }),
         ],
       }),

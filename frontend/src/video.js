@@ -93,7 +93,8 @@ export function createVideoClient({
   now = Date.now,
 } = {}) {
   if (!authClient || typeof authClient.requestWithSession !== 'function'
-      || typeof authClient.requestPublic !== 'function') {
+      || typeof authClient.requestPublic !== 'function'
+      || typeof authClient.requestWithOptionalSession !== 'function') {
     throw new TypeError('createVideoClient requires an auth client');
   }
 
@@ -133,7 +134,7 @@ export function createVideoClient({
     },
 
     async getVideo(id) {
-      return videoFrom(await authClient.requestPublic(`/videos/${checkedID(id)}`));
+      return videoFrom(await authClient.requestWithOptionalSession(`/videos/${checkedID(id)}`));
     },
 
     async listMyVideos({ page = 1, pageSize = 12 } = {}) {

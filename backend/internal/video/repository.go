@@ -12,6 +12,7 @@ import (
 	"gorm.io/gorm"
 
 	"video_share/internal/messaging"
+	"video_share/internal/user"
 )
 
 type Repository interface {
@@ -92,14 +93,15 @@ func (r *gormRepository) UpdateObjectKey(ctx context.Context, id uint64, objectK
 }
 
 func (r *gormRepository) FindByID(ctx context.Context, id uint64) (*Video, error) {
-	var v Video
-	err := r.db.WithContext(ctx).Where("id = ?", id).First(&v).Error
+	var row videoWithAuthorRow
+	err := r.withAuthorAndStats(ctx).Where("v.id = ?", id).Take(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("find video by id: %w", err)
 	}
+	v := row.video()
 	return &v, nil
 }
 
@@ -209,22 +211,11 @@ func (r *gormRepository) MarkReady(ctx context.Context, id uint64) error {
 }
 
 func (r *gormRepository) ListReady(ctx context.Context, page, pageSize int) ([]Video, int64, error) {
-	return r.listWithAuthor(ctx, page, pageSize, "v.status = ?", StatusReady)
+	return r.ListPublic(ctx, ListQuery{Page: page, PageSize: pageSize, Sort: SortLatest})
 }
 
 func (r *gormRepository) FindReadyByID(ctx context.Context, id uint64) (*Video, error) {
-	var row videoWithAuthorRow
-	err := r.withAuthor(ctx).
-		Where("v.id = ? AND v.status = ?", id, StatusReady).
-		Take(&row).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("find ready video by id: %w", err)
-	}
-	v := row.video()
-	return &v, nil
+	return r.FindPublicByID(ctx, id)
 }
 
 func (r *gormRepository) ListByUser(ctx context.Context, userID uint64, page, pageSize int) ([]Video, int64, error) {
@@ -239,7 +230,7 @@ func (r *gormRepository) listWithAuthor(ctx context.Context, page, pageSize int,
 	}
 
 	rows := make([]videoWithAuthorRow, 0, pageSize)
-	err := r.withAuthor(ctx).
+	err := r.withAuthorAndStats(ctx).
 		Where(where, args...).
 		Order("v.created_at DESC, v.id DESC").
 		Offset((page - 1) * pageSize).
@@ -288,7 +279,8 @@ func (r *gormRepository) withAuthorAndStats(ctx context.Context) *gorm.DB {
 // public. Search patterns are bound as parameters and escaped with `!`, so
 // user input cannot change the shape of the statement.
 func applyPublicFilters(db *gorm.DB, query ListQuery) *gorm.DB {
-	db = db.Where("v.status = ? AND v.visibility = ?", StatusReady, VisibilityPublic)
+	db = db.Where("v.status = ? AND v.visibility = ? AND u.status = ?",
+		StatusReady, VisibilityPublic, user.StatusNormal)
 	if query.Query == "" {
 		return db
 	}
@@ -330,7 +322,8 @@ func (r *gormRepository) ListPublic(ctx context.Context, query ListQuery) ([]Vid
 func (r *gormRepository) FindPublicByID(ctx context.Context, id uint64) (*Video, error) {
 	var row videoWithAuthorRow
 	err := r.withAuthorAndStats(ctx).
-		Where("v.id = ? AND v.status = ? AND v.visibility = ?", id, StatusReady, VisibilityPublic).
+		Where("v.id = ? AND v.status = ? AND v.visibility = ? AND u.status = ?",
+			id, StatusReady, VisibilityPublic, user.StatusNormal).
 		Take(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrNotFound

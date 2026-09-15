@@ -262,6 +262,54 @@ func TestRepositoryFindPublicByIDHidesUnavailableVideos(t *testing.T) {
 	}
 }
 
+func TestRepositoryOwnerReadsIncludeStats(t *testing.T) {
+	db := openTestDB(t)
+	repo := NewRepository(db)
+	ctx := context.Background()
+	alice, _ := seedUsers(t, db)
+	id := seedVideo(t, db, alice, "作者统计", "ok", StatusReady, VisibilityPublic,
+		"2026-09-10 10:00:00", [4]uint64{11, 12, 13, 14})
+
+	got, err := repo.FindByID(ctx, id)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if got.Stats != (Stats{ViewCount: 11, LikeCount: 12, FavoriteCount: 13, CommentCount: 14}) {
+		t.Fatalf("FindByID stats = %+v", got.Stats)
+	}
+
+	items, total, err := repo.ListByUser(ctx, alice, 1, 12)
+	if err != nil {
+		t.Fatalf("ListByUser: %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].Stats != got.Stats {
+		t.Fatalf("ListByUser total=%d items=%+v", total, items)
+	}
+}
+
+func TestDisabledAuthorVideosAreNotPublic(t *testing.T) {
+	db := openTestDB(t)
+	repo := NewRepository(db)
+	ctx := context.Background()
+	alice, _ := seedUsers(t, db)
+	id := seedVideo(t, db, alice, "禁用作者的视频", "ok", StatusReady, VisibilityPublic,
+		"2026-09-10 10:00:00", [4]uint64{})
+	if err := db.Exec("UPDATE users SET status = 2 WHERE id = ?", alice).Error; err != nil {
+		t.Fatalf("disable author: %v", err)
+	}
+
+	items, total, err := repo.ListPublic(ctx, ListQuery{Page: 1, PageSize: 12, Sort: SortLatest})
+	if err != nil {
+		t.Fatalf("ListPublic: %v", err)
+	}
+	if total != 0 || len(items) != 0 {
+		t.Fatalf("disabled author leaked: total=%d items=%+v", total, items)
+	}
+	if _, err := repo.FindPublicByID(ctx, id); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("FindPublicByID error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestRepositoryViewerState(t *testing.T) {
 	db := openTestDB(t)
 	repo := NewRepository(db)

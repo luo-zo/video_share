@@ -98,6 +98,7 @@
             <noscript><p class="field-error">请启用 JavaScript 后登录。</p></noscript>
           </form>
           <p class="switch-prompt"><span id="switch-copy">还没有自己的账号？</span><button type="button" id="switch-mode" class="text-button"><span id="switch-label">现在加入</span><svg class="icon" aria-hidden="true"><use href="#i-diagonal"/></svg></button></p>
+          <p class="switch-prompt"><span>暂时不登录？</span><button type="button" id="browse-guest" class="text-button">先看看公开视频</button></p>
           <div class="form-footnote"><svg class="icon" aria-hidden="true"><use href="#i-spark"/></svg><span>和有趣的灵魂，分享同一个世界。</span></div>
         </div>
         <div id="account-view" class="account-view app-view" hidden>
@@ -108,8 +109,8 @@
             </div>
             <nav class="app-nav" aria-label="视频功能">
               <button type="button" class="app-nav-button is-active" data-app-view="discover" aria-current="page">发现</button>
-              <button type="button" class="app-nav-button" data-app-view="upload">投稿</button>
-              <button type="button" class="app-nav-button" data-app-view="mine">我的</button>
+              <button type="button" class="app-nav-button" data-app-view="upload" data-session-required>投稿</button>
+              <button type="button" class="app-nav-button" data-app-view="mine" data-session-required>我的</button>
             </nav>
             <button id="signout" type="button" class="signout-button">退出</button>
           </header>
@@ -127,7 +128,7 @@
             </section>
 
             <section id="detail-panel" class="app-panel detail-panel" data-app-panel="detail" aria-labelledby="detail-title" hidden>
-              <button id="detail-back" type="button" class="text-button detail-back"><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg>返回发现</button>
+              <button id="detail-back" type="button" class="text-button detail-back"><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg><span id="detail-back-label">返回发现</span></button>
               <div id="video-detail" class="video-detail"></div>
               <div id="detail-actions" class="detail-actions" hidden></div>
               <div id="detail-owner" class="detail-owner" hidden></div>

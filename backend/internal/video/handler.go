@@ -29,8 +29,7 @@ func (h *Handler) Create(c *gin.Context) {
 		return
 	}
 	var req CreateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "invalid request body")
+	if !h.bindJSON(c, &req) {
 		return
 	}
 	result, err := h.svc.Create(c.Request.Context(), userID, req)
@@ -138,8 +137,7 @@ func (h *Handler) Update(c *gin.Context) {
 		return
 	}
 	var req UpdateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "invalid request body")
+	if !h.bindJSON(c, &req) {
 		return
 	}
 	result, err := h.svc.Update(c.Request.Context(), userID, id, req)
@@ -148,6 +146,20 @@ func (h *Handler) Update(c *gin.Context) {
 		return
 	}
 	response.OK(c, http.StatusOK, result)
+}
+
+func (h *Handler) bindJSON(c *gin.Context, dst any) bool {
+	err := c.ShouldBindJSON(dst)
+	if err == nil {
+		return true
+	}
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		response.Error(c, http.StatusRequestEntityTooLarge, response.CodeRequestTooLarge, "request body too large")
+		return false
+	}
+	response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "invalid request body")
+	return false
 }
 
 func (h *Handler) Delete(c *gin.Context) {

@@ -59,6 +59,17 @@ test('owner patch payloads carry only the fields the author changed', () => {
   assert.match(badVisibility.errors.visibility, /public/);
 });
 
+test('owner patch matches backend Unicode limits and omits unchanged values', () => {
+  const original = owned({ title: '旧标题', description: '旧简介', visibility: 'public' });
+  assert.deepEqual(ownerPatch({
+    title: ' 旧标题 ', description: '新简介', visibility: 'public',
+  }, original), { valid: true, values: { description: '新简介' }, errors: {} });
+  assert.equal(ownerPatch({ title: '猫', description: '', visibility: 'private' }, original).valid, true);
+  assert.equal(ownerPatch({ title: '🐱'.repeat(100), description: '', visibility: 'private' }, original).valid, true);
+  assert.match(ownerPatch({ title: '🐱'.repeat(101), description: '', visibility: 'private' }, original).errors.title, /100/);
+  assert.equal(ownerPatch({ title: '旧标题', description: '旧简介', visibility: 'public' }, original).valid, false);
+});
+
 test('the owner edit form is prefilled and offers an explicit delete', () => {
   const form = ownerEditForm(owned());
   const title = form.children.find((child) => child.attrs?.name === 'title');
@@ -86,6 +97,17 @@ test('followed accounts render as people, not videos', () => {
   const text = collectText(renderNode(grid, fakeDocument()));
   assert.match(text, /小猫/);
   assert.doesNotMatch(text, /投稿/);
+});
+
+test('favorite and history cards expose video ids and comment counts', () => {
+  for (const tab of ['favorites', 'history']) {
+    const grid = profileGrid(tab, { items: [owned({ stats: {
+      view_count: 2, like_count: 1, favorite_count: 1, comment_count: 6,
+    } })], total: 1 });
+    const open = grid.children[0].children[0].children.find((child) => child.dataset?.action === 'open-video');
+    assert.equal(open.dataset.videoId, '5');
+    assert.match(collectText(renderNode(grid, fakeDocument())), /6 评论/);
+  }
 });
 
 test('empty personal lists explain what will appear there', () => {

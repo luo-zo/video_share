@@ -71,6 +71,28 @@ func TestCreateHandlerSuccessAndInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestVideoJSONHandlersReturn413ForOversizedBodies(t *testing.T) {
+	h := newHandlerForTest(&mockRepository{}, &mockObjectStore{})
+	r := gin.New()
+	limit := middleware.LimitBody(32 * 1024)
+	r.POST("/videos", withUserID(7), limit, h.Create)
+	r.PATCH("/videos/:id", withUserID(7), limit, h.Update)
+
+	oversized := `{"title":"` + strings.Repeat("x", 40*1024) + `"}`
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/videos"},
+		{http.MethodPatch, "/videos/9"},
+	} {
+		w := performRequest(r, tc.method, tc.path, oversized)
+		if w.Code != http.StatusRequestEntityTooLarge || !strings.Contains(w.Body.String(), `"code":"REQUEST_TOO_LARGE"`) {
+			t.Fatalf("%s %s = %d %s, want 413 REQUEST_TOO_LARGE", tc.method, tc.path, w.Code, w.Body.String())
+		}
+	}
+}
+
 func TestCreateHandlerRequiresAuthenticatedUser(t *testing.T) {
 	h := newHandlerForTest(&mockRepository{}, &mockObjectStore{})
 	r := gin.New()

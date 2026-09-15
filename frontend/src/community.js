@@ -136,16 +136,17 @@ export function createCommunityClient({ authClient } = {}) {
       return relationFrom(await setRelation(`/videos/${videoID(id)}/favorite`, active));
     },
 
-    async reportWatch(id, { progressMs, durationMs } = {}) {
-      if (!Number.isInteger(durationMs) || durationMs < 1) {
+    async reportWatch(id, { progressMs, durationMs, keepalive = false } = {}) {
+      if (!Number.isInteger(durationMs) || durationMs < 0) {
         throw new CommunityError('视频时长无效。', { code: 'INVALID_PARAMETER' });
       }
-      if (!Number.isInteger(progressMs) || progressMs < 0 || progressMs > durationMs) {
+      if (!Number.isInteger(progressMs) || progressMs < 0 || (durationMs > 0 && progressMs > durationMs)) {
         throw new CommunityError('观看进度不能超过视频时长。', { code: 'INVALID_PARAMETER' });
       }
       return watchFrom(await authClient.requestWithSession(`/videos/${videoID(id)}/watch`, {
         method: 'POST',
         body: { progress_ms: progressMs, duration_ms: durationMs },
+        keepalive,
       }));
     },
 

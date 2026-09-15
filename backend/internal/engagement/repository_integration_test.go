@@ -291,6 +291,28 @@ func TestRelationTransactions(t *testing.T) {
 		}
 	})
 
+	t.Run("disabled author makes an existing public video unavailable", func(t *testing.T) {
+		db := openEngagementTestDB(t)
+		alice, bob := seedEngagementUsers(t, db)
+		vid := seedEngagementVideo(t, db, alice, video.StatusReady, video.VisibilityPublic)
+		if err := db.Exec("UPDATE users SET status = 2 WHERE id = ?", alice).Error; err != nil {
+			t.Fatalf("disable author: %v", err)
+		}
+		repo := NewRepository(db)
+		if _, err := repo.SetLike(ctx, bob, vid, true); !errors.Is(err, ErrVideoNotFound) {
+			t.Fatalf("SetLike error = %v, want ErrVideoNotFound", err)
+		}
+		if _, err := repo.SetFavorite(ctx, bob, vid, true); !errors.Is(err, ErrVideoNotFound) {
+			t.Fatalf("SetFavorite error = %v, want ErrVideoNotFound", err)
+		}
+		if _, err := repo.CreateComment(ctx, bob, vid, "comment"); !errors.Is(err, ErrVideoNotFound) {
+			t.Fatalf("CreateComment error = %v, want ErrVideoNotFound", err)
+		}
+		if err := repo.RecordWatch(ctx, bob, vid, 1, 2); !errors.Is(err, ErrVideoNotFound) {
+			t.Fatalf("RecordWatch error = %v, want ErrVideoNotFound", err)
+		}
+	})
+
 	t.Run("counters never fall below zero", func(t *testing.T) {
 		db := openEngagementTestDB(t)
 		alice, _ := seedEngagementUsers(t, db)
@@ -322,20 +344,30 @@ func TestRelationTransactions(t *testing.T) {
 
 		const workers = 8
 		var wg sync.WaitGroup
+		states := make(chan *RelationState, workers)
 		errs := make(chan error, workers)
 		for i := 0; i < workers; i++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if _, err := repo.SetLike(ctx, alice, vid, true); err != nil {
+				state, err := repo.SetLike(ctx, alice, vid, true)
+				if err != nil {
 					errs <- err
+					return
 				}
+				states <- state
 			}()
 		}
 		wg.Wait()
 		close(errs)
+		close(states)
 		for err := range errs {
 			t.Fatalf("concurrent SetLike: %v", err)
+		}
+		for state := range states {
+			if !state.Active || state.Count != 1 {
+				t.Fatalf("concurrent SetLike state = %+v, want active count 1", state)
+			}
 		}
 
 		if got := relationRowCount(t, db, "video_likes", alice, vid); got != 1 {
@@ -343,6 +375,44 @@ func TestRelationTransactions(t *testing.T) {
 		}
 		if got := statsCount(t, db, vid, "like_count"); got != 1 {
 			t.Fatalf("like_count = %d, want 1", got)
+		}
+	})
+
+	t.Run("concurrent duplicate disables return the current final state", func(t *testing.T) {
+		db := openEngagementTestDB(t)
+		alice, _ := seedEngagementUsers(t, db)
+		vid := seedEngagementVideo(t, db, alice, video.StatusReady, video.VisibilityPublic)
+		repo := NewRepository(db)
+		if _, err := repo.SetFavorite(ctx, alice, vid, true); err != nil {
+			t.Fatalf("seed favorite: %v", err)
+		}
+
+		const workers = 8
+		states := make(chan *RelationState, workers)
+		errs := make(chan error, workers)
+		var wg sync.WaitGroup
+		for i := 0; i < workers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				state, err := repo.SetFavorite(ctx, alice, vid, false)
+				if err != nil {
+					errs <- err
+					return
+				}
+				states <- state
+			}()
+		}
+		wg.Wait()
+		close(errs)
+		close(states)
+		for err := range errs {
+			t.Fatalf("concurrent SetFavorite(false): %v", err)
+		}
+		for state := range states {
+			if state.Active || state.Count != 0 {
+				t.Fatalf("concurrent SetFavorite(false) state = %+v, want inactive count 0", state)
+			}
 		}
 	})
 }
@@ -561,6 +631,20 @@ func TestCommentTransaction(t *testing.T) {
 func TestWatchUpsert(t *testing.T) {
 	ctx := context.Background()
 
+	t.Run("missing watcher is rejected instead of silently ignored", func(t *testing.T) {
+		db := openEngagementTestDB(t)
+		alice, _ := seedEngagementUsers(t, db)
+		vid := seedEngagementVideo(t, db, alice, video.StatusReady, video.VisibilityPublic)
+
+		err := NewRepository(db).RecordWatch(ctx, ^uint64(0), vid, 1, 2)
+		if err == nil {
+			t.Fatal("RecordWatch error = nil, want foreign key error")
+		}
+		if got := statsCount(t, db, vid, "view_count"); got != 0 {
+			t.Fatalf("view_count = %d, want 0", got)
+		}
+	})
+
 	t.Run("first watch records history and increments views", func(t *testing.T) {
 		db := openEngagementTestDB(t)
 		alice, _ := seedEngagementUsers(t, db)
@@ -690,8 +774,8 @@ func TestWatchUpsert(t *testing.T) {
 		if err := repo.RecordWatch(ctx, alice, second, 2, 10); err != nil {
 			t.Fatalf("watch second: %v", err)
 		}
-		// 让第二次观看的时间戳严格晚于第一次，避免同毫秒排序歧义。
-		if err := db.Exec("UPDATE watch_histories SET last_watched_at = UTC_TIMESTAMP(3) + INTERVAL 1 SECOND WHERE video_id = ?", second).Error; err != nil {
+		// 让第二条记录严格晚于它自己的首次观看时间，避免依赖测试机与数据库时钟。
+		if err := db.Exec("UPDATE watch_histories SET last_watched_at = first_watched_at + INTERVAL 1 SECOND WHERE video_id = ?", second).Error; err != nil {
 			t.Fatalf("advance second timestamp: %v", err)
 		}
 
@@ -734,7 +818,7 @@ func TestWatchUpsert(t *testing.T) {
 		if _, err := repo.SetFavorite(ctx, alice, second, true); err != nil {
 			t.Fatalf("favorite second: %v", err)
 		}
-		if err := db.Exec("UPDATE video_favorites SET created_at = UTC_TIMESTAMP(3) + INTERVAL 1 SECOND WHERE user_id = ? AND video_id = ?", alice, second).Error; err != nil {
+		if err := db.Exec("UPDATE video_favorites SET created_at = created_at + INTERVAL 1 SECOND WHERE user_id = ? AND video_id = ?", alice, second).Error; err != nil {
 			t.Fatalf("advance second favorite timestamp: %v", err)
 		}
 

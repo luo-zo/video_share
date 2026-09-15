@@ -105,3 +105,20 @@ test('reports a useful error when HLS is unsupported', async () => {
     /不支持 HLS/,
   );
 });
+
+test('destroys hls.js when initialization fails after construction', async () => {
+  const calls = [];
+  class BrokenHls {
+    static isSupported() { return true; }
+    loadSource() { calls.push('load'); throw new Error('bad manifest'); }
+    attachMedia() { calls.push('attach'); }
+    destroy() { calls.push('destroy'); }
+  }
+  await assert.rejects(
+    attachVideoSource(fakeVideo(false), { play_type: 'hls', play_url: '/master.m3u8' }, {
+      loadHls: async () => ({ default: BrokenHls }),
+    }),
+    /初始化失败/,
+  );
+  assert.deepEqual(calls, ['load', 'destroy']);
+});

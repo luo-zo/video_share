@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"video_share/internal/user"
 	"video_share/internal/video"
 )
 
@@ -90,8 +90,10 @@ func (r *gormRepository) mutate(ctx context.Context, userID, videoID uint64, act
 // ensureEngageableVideo 只允许对公开且已就绪的视频建立互动关系。
 func ensureEngageableVideo(tx *gorm.DB, videoID uint64) error {
 	var count int64
-	if err := tx.Model(&video.Video{}).
-		Where("id = ? AND status = ? AND visibility = ?", videoID, video.StatusReady, video.VisibilityPublic).
+	if err := tx.Table("videos AS v").
+		Joins("JOIN users AS u ON u.id = v.user_id").
+		Where("v.id = ? AND v.status = ? AND v.visibility = ? AND u.status = ?",
+			videoID, video.StatusReady, video.VisibilityPublic, user.StatusNormal).
 		Count(&count).Error; err != nil {
 		return fmt.Errorf("check engageable video: %w", err)
 	}
@@ -160,17 +162,20 @@ func knownCounter(counter string) bool {
 }
 
 func readRelationState(tx *gorm.DB, record any, userID, videoID uint64, counter string) (RelationState, error) {
-	var mine int64
-	if err := tx.Model(record).Where("user_id = ? AND video_id = ?", userID, videoID).
-		Count(&mine).Error; err != nil {
+	var relationRows []struct{ Marker int }
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Model(record).
+		Select("1 AS marker").
+		Where("user_id = ? AND video_id = ?", userID, videoID).
+		Limit(1).Find(&relationRows).Error; err != nil {
 		return RelationState{}, fmt.Errorf("check relation: %w", err)
 	}
 	var stats struct{ Value uint64 }
-	if err := tx.Model(&VideoStats{}).Select(counter+" AS value").Where("video_id = ?", videoID).
-		Scan(&stats).Error; err != nil {
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Model(&VideoStats{}).
+		Select(counter+" AS value").Where("video_id = ?", videoID).
+		Take(&stats).Error; err != nil {
 		return RelationState{}, fmt.Errorf("read relation counter: %w", err)
 	}
-	return RelationState{Active: mine > 0, Count: stats.Value}, nil
+	return RelationState{Active: len(relationRows) > 0, Count: stats.Value}, nil
 }
 
 func (r *gormRepository) CreateComment(ctx context.Context, userID, videoID uint64, content string) (*Comment, error) {
@@ -260,17 +265,13 @@ func (r *gormRepository) RecordWatch(ctx context.Context, userID, videoID, progr
 		if err := ensureEngageableVideo(tx, videoID); err != nil {
 			return err
 		}
-		// FirstWatchedAt / LastWatchedAt 不是 GORM 约定的时间戳字段，必须显式赋值。
-		now := time.Now().UTC()
-		history := WatchHistory{
-			UserID:         userID,
-			VideoID:        videoID,
-			ProgressMS:     progressMS,
-			DurationMS:     durationMS,
-			FirstWatchedAt: now,
-			LastWatchedAt:  now,
-		}
-		insert := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&history)
+		// DATETIME 不保存时区。首次写入和后续更新必须使用同一数据库时钟，
+		// 否则应用进程与 MySQL 的时区不同会使 last_watched_at 早于 first_watched_at。
+		insert := tx.Exec(`INSERT INTO watch_histories
+			(user_id, video_id, progress_ms, duration_ms, first_watched_at, last_watched_at)
+			VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))
+			ON DUPLICATE KEY UPDATE user_id = watch_histories.user_id`,
+			userID, videoID, progressMS, durationMS)
 		if insert.Error != nil {
 			return fmt.Errorf("record watch history: %w", insert.Error)
 		}
@@ -282,7 +283,7 @@ func (r *gormRepository) RecordWatch(ctx context.Context, userID, videoID, progr
 			Updates(map[string]any{
 				"progress_ms":     progressMS,
 				"duration_ms":     durationMS,
-				"last_watched_at": gorm.Expr("UTC_TIMESTAMP(3)"),
+				"last_watched_at": gorm.Expr("GREATEST(last_watched_at, first_watched_at, CURRENT_TIMESTAMP(3))"),
 			})
 		if result.Error != nil {
 			return fmt.Errorf("update watch history: %w", result.Error)
@@ -309,7 +310,8 @@ func (r *gormRepository) listPersonal(ctx context.Context, userID uint64, page, 
 			Joins(join, userID).
 			Joins("JOIN users AS u ON u.id = v.user_id").
 			Joins("LEFT JOIN video_stats AS s ON s.video_id = v.id").
-			Where("v.status = ? AND v.visibility = ?", video.StatusReady, video.VisibilityPublic)
+			Where("v.status = ? AND v.visibility = ? AND u.status = ?",
+				video.StatusReady, video.VisibilityPublic, user.StatusNormal)
 	}
 
 	var total int64

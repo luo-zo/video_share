@@ -4,11 +4,11 @@ import { createCommunityClient } from './community.js';
 import { renderInto } from './view-kit.js';
 import {
   applyQuery, applySort, changePage, discoverGrid, discoverPagination,
-  discoverRequest, initialDiscoverState, resultSummary, searchForm,
+  discoverRequest, initialDiscoverState, paginationBounds, resultSummary, searchForm,
 } from './discover-view.js';
 import {
   actionBar, commentComposer, commentDraft, commentList, optimisticRelation,
-  relationFromServer, shouldReportWatch, watchPayload,
+  relationFromServer, shouldReportWatch, watchPayload, withCleanupOnFailure,
 } from './detail-view.js';
 import {
   deleteConfirmation, normalizeTab, ownerEditForm, ownerPatch, profileGrid,
@@ -40,9 +40,12 @@ let disabledStates = [];
 let discover = initialDiscoverState();
 let profileTab = 'videos';
 const profilePages = { videos: 1, favorites: 1, history: 1, follows: 1 };
-let listRequest = 0;
+let discoverRequestGeneration = 0;
+let mineRequestGeneration = 0;
 let detailRequest = 0;
+let commentsRequest = 0;
 let detailId = null;
+let detailReturnView = 'discover';
 let releasePlayer = () => {};
 let processingMonitor = null;
 
@@ -55,6 +58,7 @@ function clearPlayer() {
   releasePlayer();
   releasePlayer = () => {};
   detailRequest += 1;
+  commentsRequest += 1;
   for (const id of ['detail-actions', 'detail-owner', 'detail-comment-composer', 'detail-comment-list']) {
     byId(id).replaceChildren();
   }
@@ -121,6 +125,32 @@ function showAuth() {
   byId('header-prompt').hidden = false;
   skipLink.href = '#username';
   skipLink.textContent = '跳到登录表单';
+}
+
+function resetProfileState() {
+  profileTab = 'videos';
+  for (const tab of Object.keys(profilePages)) profilePages[tab] = 1;
+  mineRequestGeneration += 1;
+  renderProfileTabs();
+  byId('mine-list').replaceChildren();
+  byId('mine-pagination').replaceChildren();
+}
+
+function showGuestApp(notice = '') {
+  authView.hidden = true;
+  accountView.hidden = false;
+  pageShell.classList.add('app-mode');
+  modeToggle.hidden = false;
+  byId('header-prompt').hidden = false;
+  setText('header-prompt', '想投稿、评论或收藏？');
+  setText('mode-toggle-label', '登录 / 注册');
+  setText('account-nickname', '游客放映厅');
+  setText('account-username', 'guest');
+  byId('signout').hidden = true;
+  document.querySelectorAll('[data-session-required]').forEach((control) => { control.hidden = true; });
+  skipLink.href = '#app-content';
+  skipLink.textContent = '跳到视频内容';
+  setAppMessage(notice);
 }
 
 function setMode(nextMode, { message = '', focus = true } = {}) {
@@ -191,6 +221,8 @@ function showAccount(user, notice = '') {
   accountView.hidden = false;
   modeToggle.hidden = true;
   byId('header-prompt').hidden = true;
+  byId('signout').hidden = false;
+  document.querySelectorAll('[data-session-required]').forEach((control) => { control.hidden = false; });
   pageShell.classList.add('app-mode');
   skipLink.href = '#app-content';
   skipLink.textContent = '跳到视频内容';
@@ -212,8 +244,20 @@ function reportAuthError(error) {
 function leaveExpiredSession(error) {
   if (!isSessionError(error)) return false;
   auth.signOut();
-  setMode('login', { message: error.message || '登录状态已失效，请重新登录。' });
+  stopProcessingMonitor();
+  clearPlayer();
+  resetProfileState();
+  showGuestApp();
+  selectView('discover', { focus: true });
+  setAppMessage(error.message || '请登录后继续操作。', 'error');
   return true;
+}
+
+function requireSession(message = '请先登录，再继续这个操作。') {
+  if (currentUserId() !== null) return true;
+  setAppMessage(message, 'error');
+  modeToggle.focus();
+  return false;
 }
 
 function reportAppError(error) {
@@ -247,7 +291,7 @@ function renderEmpty(container, message) {
   container.replaceChildren(empty);
 }
 
-function renderCards(container, items, emptyMessage) {
+function renderCards(container, items, emptyMessage, { owner = false } = {}) {
   if (!items.length) {
     renderEmpty(container, emptyMessage);
     return;
@@ -292,10 +336,18 @@ function renderCards(container, items, emptyMessage) {
       content.append(make('span', 'processing-error', item.processing_error));
     }
     if (item.description) content.append(make('span', 'video-card-description', item.description));
+    const stats = item.stats || {};
+    content.append(make(
+      'span',
+      'video-card-stats',
+      `${Number(stats.like_count) || 0} 赞 · ${Number(stats.view_count) || 0} 播放 · ${Number(stats.comment_count) || 0} 评论`,
+    ));
     const author = item.author?.nickname || item.author?.username;
     if (author) content.append(make('span', 'video-card-author', `BY ${author}`));
     card.append(art, content);
-    if (item.status === 'ready' || item.status === 'published') {
+    if (owner) {
+      card.addEventListener('click', () => openOwnerDetail(item.id));
+    } else if (item.status === 'ready' || item.status === 'published') {
       card.addEventListener('click', () => openDetail(item.id));
     } else {
       card.disabled = true;
@@ -314,27 +366,34 @@ function renderDiscoverForm() {
 }
 
 async function loadDiscover() {
-  const ownRequest = ++listRequest;
+  const ownRequest = ++discoverRequestGeneration;
+  const requestedState = { ...discover };
   const container = byId('discover-list');
   container.setAttribute('aria-busy', 'true');
   container.replaceChildren(make('p', 'loading-state', '正在寻找值得放映的故事…'));
   try {
-    const result = await videos.listVideos(discoverRequest(discover));
-    if (ownRequest !== listRequest) return;
+    const result = await videos.listVideos(discoverRequest(requestedState));
+    if (ownRequest !== discoverRequestGeneration) return;
+    const bounds = paginationBounds(requestedState, result);
+    if (bounds.page !== requestedState.page) {
+      discover = { ...discover, page: bounds.page };
+      loadDiscover();
+      return;
+    }
     renderInto(container, discoverGrid(result));
-    byId('discover-summary').textContent = resultSummary(discover, result);
-    renderInto(byId('discover-pagination'), discoverPagination(discover, result));
+    byId('discover-summary').textContent = resultSummary(requestedState, result);
+    renderInto(byId('discover-pagination'), discoverPagination(requestedState, result));
     container.querySelectorAll('.video-card').forEach((card) => {
       card.addEventListener('click', () => openDetail(Number(card.dataset.videoId)));
     });
   } catch (error) {
-    if (ownRequest !== listRequest) return;
+    if (ownRequest !== discoverRequestGeneration) return;
     container.replaceChildren();
     byId('discover-summary').textContent = '';
     renderInto(byId('discover-pagination'), null);
     reportAppError(error);
   } finally {
-    container.removeAttribute('aria-busy');
+    if (ownRequest === discoverRequestGeneration) container.removeAttribute('aria-busy');
   }
 }
 
@@ -343,31 +402,40 @@ function renderProfileTabs() {
 }
 
 async function loadMine() {
-  const ownRequest = ++listRequest;
+  if (!requireSession('请先登录，再查看你的个人中心。')) return;
+  const ownRequest = ++mineRequestGeneration;
+  const requestedTab = profileTab;
   const container = byId('mine-list');
   container.setAttribute('aria-busy', 'true');
   container.replaceChildren(make('p', 'loading-state', '正在整理你的放映室…'));
   try {
-    const page = profilePages[profileTab];
-    const { loader } = profileRequest(profileTab, { page });
+    const page = profilePages[requestedTab];
+    const { loader } = profileRequest(requestedTab, { page });
     const result = loader === 'listMyVideos'
       ? await videos.listMyVideos({ page })
       : await community[loader]({ page });
-    if (ownRequest !== listRequest) return;
-    profilePages[profileTab] = result.page;
-    if (profileTab === 'videos') renderCards(container, result.items, '你还没有投稿');
-    else renderInto(container, profileGrid(profileTab, result));
-    renderInto(byId('mine-pagination'), discoverPagination({ page: result.page, pageSize: result.page_size }, result));
+    if (ownRequest !== mineRequestGeneration || requestedTab !== profileTab) return;
+    const bounds = paginationBounds({ page, pageSize: result.page_size }, result);
+    if (bounds.page !== page) {
+      profilePages[requestedTab] = bounds.page;
+      loadMine();
+      return;
+    }
+    profilePages[requestedTab] = bounds.page;
+    if (requestedTab === 'videos') renderCards(container, result.items, '你还没有投稿', { owner: true });
+    else renderInto(container, profileGrid(requestedTab, result));
+    renderInto(byId('mine-pagination'), discoverPagination({ page: bounds.page, pageSize: result.page_size }, result));
   } catch (error) {
-    if (ownRequest !== listRequest) return;
+    if (ownRequest !== mineRequestGeneration || requestedTab !== profileTab) return;
     container.replaceChildren();
     reportAppError(error);
   } finally {
-    container.removeAttribute('aria-busy');
+    if (ownRequest === mineRequestGeneration) container.removeAttribute('aria-busy');
   }
 }
 
 function selectView(view, { focus = true, load = true } = {}) {
+  if (['upload', 'mine'].includes(view) && !requireSession('请先登录，再使用投稿和个人中心。')) return;
   if (view !== 'detail') clearPlayer();
   document.querySelectorAll('[data-app-panel]').forEach((panel) => { panel.hidden = panel.dataset.appPanel !== view; });
   document.querySelectorAll('[data-app-view]').forEach((button) => {
@@ -413,6 +481,8 @@ function paintActions(bar, relations) {
 }
 
 async function toggleRelation(action, item, relations, bar) {
+  if (!requireSession(`请先登录，再${action === 'like' ? '点赞' : action === 'favorite' ? '收藏' : '关注'}。`)) return;
+  const ownDetailRequest = detailRequest;
   const button = bar.querySelector(`[data-action="${action}"]`);
   const snapshot = { ...relations[action] };
   const next = !snapshot.active;
@@ -425,36 +495,43 @@ async function toggleRelation(action, item, relations, bar) {
       : action === 'favorite'
         ? await community.setFavorite(item.id, next)
         : await community.setFollow(item.author?.id, next);
+    if (ownDetailRequest !== detailRequest) return;
     relations[action] = action === 'follow'
       ? { active: Boolean(server.following) }
       : relationFromServer(server, relations[action]);
   } catch (error) {
+    if (ownDetailRequest !== detailRequest) return;
     relations[action] = snapshot;
     reportAppError(error);
   } finally {
+    if (ownDetailRequest !== detailRequest) return;
     if (button) button.disabled = false;
     paintActions(bar, relations);
   }
 }
 
 async function loadComments(videoId, host) {
-  const ownRequest = detailRequest;
+  const ownDetailRequest = detailRequest;
+  const ownRequest = ++commentsRequest;
   host.setAttribute('aria-busy', 'true');
   host.replaceChildren(make('p', 'loading-state', '正在加载评论…'));
   try {
     const result = await community.listComments(videoId, { pageSize: 50 });
-    if (ownRequest !== detailRequest) return;
+    if (ownDetailRequest !== detailRequest || ownRequest !== commentsRequest) return;
     renderInto(host, commentList(result.items, currentUserId()));
   } catch (error) {
-    if (ownRequest !== detailRequest) return;
+    if (ownDetailRequest !== detailRequest || ownRequest !== commentsRequest) return;
     host.replaceChildren();
     reportAppError(error);
   } finally {
-    host.removeAttribute('aria-busy');
+    if (ownDetailRequest === detailRequest && ownRequest === commentsRequest) {
+      host.removeAttribute('aria-busy');
+    }
   }
 }
 
 function renderComposer(item, state = {}) {
+  const ownDetailRequest = detailRequest;
   const mount = byId('detail-comment-composer');
   const draft = {
     content: state.content ?? '',
@@ -466,6 +543,7 @@ function renderComposer(item, state = {}) {
   const form = mount.querySelector('.comment-composer');
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
+    if (!requireSession('请先登录，再发表评论。')) return;
     const typed = form.querySelector('textarea').value;
     const checked = commentDraft(typed);
     if (!checked.valid) {
@@ -476,9 +554,11 @@ function renderComposer(item, state = {}) {
     renderComposer(item, { content: typed, submitting: true });
     try {
       await community.addComment(item.id, { content: checked.content });
+      if (ownDetailRequest !== detailRequest) return;
       renderComposer(item);
       await loadComments(item.id, byId('detail-comment-list'));
     } catch (error) {
+      if (ownDetailRequest !== detailRequest) return;
       renderComposer(item, { content: typed, error: error.message || '评论发布失败。' });
       reportAppError(error);
     }
@@ -487,14 +567,25 @@ function renderComposer(item, state = {}) {
 
 // 观看上报是尽力而为的：匿名观众没有会话，静默跳过，不能影响播放体验。
 function watchReporter(player, videoId, durationMs) {
-  if (!Number.isFinite(durationMs) || durationMs <= 0) return () => {};
+  if (!Number.isFinite(durationMs) || durationMs < 0 || currentUserId() === null) return () => {};
   let lastReportedMs = 0;
+  let lastSentMs = -1;
   let started = false;
-  const send = (positionMs) => {
-    const payload = watchPayload(positionMs, durationMs);
+  const knownDurationMs = () => {
+    const mediaDuration = Math.floor(Number(player.duration) * 1000);
+    return Number.isFinite(mediaDuration) && mediaDuration > 0 ? mediaDuration : durationMs;
+  };
+  const send = (positionMs, { keepalive = false, force = false } = {}) => {
+    const payload = watchPayload(positionMs, knownDurationMs());
     if (!payload) return;
+    if (force && payload.progress_ms === lastSentMs) return;
     lastReportedMs = payload.progress_ms;
-    community.reportWatch(videoId, { progressMs: payload.progress_ms, durationMs: payload.duration_ms })
+    lastSentMs = payload.progress_ms;
+    community.reportWatch(videoId, {
+      progressMs: payload.progress_ms,
+      durationMs: payload.duration_ms,
+      keepalive,
+    })
       .catch((error) => { if (!isSessionError(error)) reportAppError(error); });
   };
   const positionMs = () => Math.floor(Math.max(0, Number(player.currentTime) || 0) * 1000);
@@ -505,18 +596,22 @@ function watchReporter(player, videoId, durationMs) {
   };
   const onTimeUpdate = () => {
     const current = positionMs();
-    if (shouldReportWatch({ lastReportedMs, positionMs: current, durationMs })) send(current);
+    if (shouldReportWatch({ lastReportedMs, positionMs: current, durationMs: knownDurationMs() })) send(current);
   };
   const onVisibilityChange = () => {
-    if (started && document.visibilityState === 'hidden') send(positionMs());
+    if (started && document.visibilityState === 'hidden') send(positionMs(), { keepalive: true, force: true });
   };
+  const onPageHide = () => { if (started) send(positionMs(), { keepalive: true, force: true }); };
   player.addEventListener('playing', onPlaying);
   player.addEventListener('timeupdate', onTimeUpdate);
   document.addEventListener('visibilitychange', onVisibilityChange);
+  window.addEventListener('pagehide', onPageHide);
   return () => {
+    if (started) send(positionMs(), { keepalive: true, force: true });
     player.removeEventListener('playing', onPlaying);
     player.removeEventListener('timeupdate', onTimeUpdate);
     document.removeEventListener('visibilitychange', onVisibilityChange);
+    window.removeEventListener('pagehide', onPageHide);
   };
 }
 
@@ -540,11 +635,12 @@ function renderDeleteConfirmation(item) {
 }
 
 async function submitOwnerPatch(item, mount) {
+  const ownDetailRequest = detailRequest;
   const patch = ownerPatch({
     title: mount.querySelector('[name="title"]').value,
     description: mount.querySelector('[name="description"]').value,
     visibility: mount.querySelector('[name="visibility"]').value,
-  });
+  }, item);
   if (!patch.valid) {
     setAppMessage(Object.values(patch.errors).join(' '), 'error');
     return;
@@ -553,53 +649,86 @@ async function submitOwnerPatch(item, mount) {
   save.disabled = true;
   try {
     await videos.updateVideo(item.id, patch.values);
+    if (ownDetailRequest !== detailRequest || Number(item.id) !== detailId) return;
     setAppMessage('视频信息已更新。', 'success');
-    await openDetail(item.id);
+    await openOwnerDetail(item.id);
   } catch (error) {
+    if (ownDetailRequest !== detailRequest || Number(item.id) !== detailId) return;
     save.disabled = false;
     reportAppError(error);
   }
 }
 
 async function confirmDeleteVideo(item) {
+  const ownDetailRequest = detailRequest;
   const confirm = byId('detail-owner').querySelector('[data-action="confirm-delete"]');
   if (confirm) confirm.disabled = true;
   try {
     await videos.deleteVideo(item.id);
+    if (ownDetailRequest !== detailRequest || Number(item.id) !== detailId) return;
     profilePages.videos = 1;
     profileTab = 'videos';
     selectView('mine', { focus: false });
     setAppMessage('视频已删除。', 'success');
   } catch (error) {
+    if (ownDetailRequest !== detailRequest || Number(item.id) !== detailId) return;
     if (confirm) confirm.disabled = false;
     reportAppError(error);
   }
 }
 
-async function openDetail(id) {
+function openOwnerDetail(id) {
+  return openDetail(id, { owner: true });
+}
+
+async function openDetail(id, { owner = false } = {}) {
   clearPlayer();
   detailId = Number(id);
+  detailReturnView = owner ? 'mine' : 'discover';
+  setText('detail-back-label', owner ? '返回我的' : '返回发现');
   const ownRequest = detailRequest;
   selectView('detail', { focus: false, load: false });
   const container = byId('video-detail');
+  let pendingWatchCleanup = () => {};
   container.setAttribute('aria-busy', 'true');
   container.replaceChildren(make('p', 'loading-state', '正在准备放映…'));
   try {
-    const item = await videos.getVideo(id);
+    const hadSession = currentUserId() !== null;
+    const item = owner ? await videos.getMyVideo(id) : await videos.getVideo(id);
     if (ownRequest !== detailRequest) return;
+    if (!owner && hadSession && currentUserId() === null) {
+      stopProcessingMonitor();
+      resetProfileState();
+      showGuestApp('登录状态已失效，已切换为游客浏览。');
+    }
     const article = make('article', 'detail-card');
     const playerWrap = make('div', 'player-wrap');
-    const player = document.createElement('video');
-    player.controls = true;
-    player.preload = 'metadata';
-    player.playsInline = true;
-    if (item.cover_url) player.poster = item.cover_url;
-    player.setAttribute('aria-label', `播放 ${item.title}`);
-    playerWrap.append(player);
+    const playable = ['ready', 'published'].includes(item.status)
+      && typeof item.play_url === 'string' && item.play_url.length > 0;
+    let player = null;
+    if (playable) {
+      player = document.createElement('video');
+      player.controls = true;
+      player.preload = 'metadata';
+      player.playsInline = true;
+      if (item.cover_url) player.poster = item.cover_url;
+      player.setAttribute('aria-label', `播放 ${item.title}`);
+      playerWrap.append(player);
+    } else {
+      playerWrap.append(make(
+        'p',
+        'loading-state',
+        owner ? `${statusName(item.status)}，你仍可在右侧修改或删除这支投稿。` : '暂时无法播放这支视频。',
+      ));
+    }
 
     const copy = make('div', 'detail-copy');
     const meta = make('div', 'detail-meta');
-    meta.append(make('span', 'status-chip status-ready', '可播放'), make('span', '', dateLabel(item.created_at)));
+    const visibilitySuffix = item.visibility === 'private' ? ' · 私密' : '';
+    meta.append(
+      make('span', `status-chip status-${item.status || 'unknown'}`, `${statusName(item.status)}${visibilitySuffix}`),
+      make('span', '', dateLabel(item.created_at)),
+    );
     const title = make('h2', '', item.title || '未命名视频');
     title.id = 'detail-title';
     title.tabIndex = -1;
@@ -617,43 +746,60 @@ async function openDetail(id) {
     container.replaceChildren(article);
 
     const relations = relationState(item);
-    const actions = byId('detail-actions');
-    renderInto(actions, actionBar(item));
-    actions.hidden = false;
-    const bar = actions.firstElementChild;
-    paintActions(bar, relations);
-    for (const action of ['like', 'favorite', 'follow']) {
-      bar.querySelector(`[data-action="${action}"]`)
-        ?.addEventListener('click', () => toggleRelation(action, item, relations, bar));
+    if (!owner) {
+      const actions = byId('detail-actions');
+      renderInto(actions, actionBar(item, currentUserId()));
+      actions.hidden = false;
+      const bar = actions.firstElementChild;
+      paintActions(bar, relations);
+      for (const action of ['like', 'favorite', 'follow']) {
+        bar.querySelector(`[data-action="${action}"]`)
+          ?.addEventListener('click', () => toggleRelation(action, item, relations, bar));
+      }
     }
 
-    if (Number(item.user_id) === currentUserId()) renderOwnerForm(item);
+    if (owner || Number(item.user_id) === currentUserId()) renderOwnerForm(item);
 
-    byId('detail-comments').hidden = false;
-    renderComposer(item);
-    loadComments(item.id, byId('detail-comment-list'));
-
-    const stopWatch = watchReporter(player, item.id, Number(item.duration_ms) || 0);
-    const cleanup = await attachVideoSource(player, item, {
-      onError: (playbackError) => {
-        if (!playbackError.fatal) return;
-        const diagnostic = JSON.stringify(playbackError);
-        console.error(`HLS playback error: ${diagnostic}`);
-        setAppMessage(`视频播放失败（${playbackError.details || playbackError.type || 'HLS_ERROR'}）。`, 'error');
-      },
-    });
-    if (ownRequest !== detailRequest) {
-      stopWatch();
-      cleanup();
-      return;
+    if (!owner) {
+      byId('detail-comments').hidden = false;
+      renderComposer(item);
+      loadComments(item.id, byId('detail-comment-list'));
     }
-    releasePlayer = () => { stopWatch(); cleanup(); };
+
+    if (player) {
+      const stopWatch = watchReporter(player, item.id, Number(item.duration_ms) || 0);
+      pendingWatchCleanup = stopWatch;
+      const cleanup = await withCleanupOnFailure(() => attachVideoSource(player, item, {
+        onError: (playbackError) => {
+          if (!playbackError.fatal || ownRequest !== detailRequest) return;
+          const diagnostic = JSON.stringify(playbackError);
+          console.error(`HLS playback error: ${diagnostic}`);
+          setAppMessage(`视频播放失败（${playbackError.details || playbackError.type || 'HLS_ERROR'}）。`, 'error');
+        },
+      }), stopWatch);
+      pendingWatchCleanup = () => {};
+      if (ownRequest !== detailRequest) {
+        stopWatch();
+        cleanup();
+        return;
+      }
+      releasePlayer = () => { stopWatch(); cleanup(); };
+    }
     title.focus();
   } catch (error) {
+    pendingWatchCleanup();
+    if (ownRequest !== detailRequest) return;
+    commentsRequest += 1;
+    for (const id of ['detail-actions', 'detail-owner', 'detail-comment-composer', 'detail-comment-list']) {
+      byId(id).replaceChildren();
+    }
+    byId('detail-actions').hidden = true;
+    byId('detail-owner').hidden = true;
+    byId('detail-comments').hidden = true;
     container.replaceChildren();
     reportAppError(error);
   } finally {
-    container.removeAttribute('aria-busy');
+    if (ownRequest === detailRequest) container.removeAttribute('aria-busy');
   }
 }
 
@@ -765,9 +911,18 @@ passwordToggle.addEventListener('click', () => {
   fields.password.focus();
 });
 
-for (const toggle of [modeToggle, switchMode]) {
-  toggle.addEventListener('click', () => setMode(mode === 'login' ? 'register' : 'login'));
-}
+modeToggle.addEventListener('click', () => {
+  if (!accountView.hidden && currentUserId() === null) {
+    setMode('login');
+    return;
+  }
+  setMode(mode === 'login' ? 'register' : 'login');
+});
+switchMode.addEventListener('click', () => setMode(mode === 'login' ? 'register' : 'login'));
+byId('browse-guest').addEventListener('click', () => {
+  showGuestApp();
+  selectView('discover', { focus: true });
+});
 
 remember.addEventListener('change', () => {
   if (!remember.checked) rememberUsername('', false);
@@ -799,6 +954,7 @@ form.addEventListener('submit', async (event) => {
 
     const user = await auth.signIn(validation.values);
     const storageNotice = rememberUsername(validation.values.username, remember.checked);
+    resetProfileState();
     showAccount(user, storageNotice);
     discover = initialDiscoverState();
     renderDiscoverForm();
@@ -814,7 +970,11 @@ byId('signout').addEventListener('click', () => {
   stopProcessingMonitor();
   clearPlayer();
   auth.signOut();
-  setMode('login', { message: '你已安全退出。' });
+  resetProfileState();
+  discover = initialDiscoverState();
+  renderDiscoverForm();
+  showGuestApp('你已安全退出，仍可继续浏览公开视频。');
+  selectView('discover', { focus: true });
 });
 
 document.querySelectorAll('[data-app-view]').forEach((button) => {
@@ -823,7 +983,7 @@ document.querySelectorAll('[data-app-view]').forEach((button) => {
 
 byId('refresh-discover').addEventListener('click', loadDiscover);
 byId('refresh-mine').addEventListener('click', loadMine);
-byId('detail-back').addEventListener('click', () => selectView('discover'));
+byId('detail-back').addEventListener('click', () => selectView(detailReturnView));
 
 // 表单每次重绘都换新节点，所以监听器挂在不变的挂载点上做事件委托。
 byId('discover-search').addEventListener('submit', (event) => {
@@ -870,14 +1030,25 @@ byId('mine-pagination').addEventListener('click', (event) => {
   loadMine();
 });
 
+byId('mine-list').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-action="open-video"]');
+  if (!button) return;
+  openDetail(Number(button.dataset.videoId));
+});
+
 byId('detail-comment-list').addEventListener('click', async (event) => {
   const button = event.target.closest('[data-action="delete-comment"]');
   if (!button || detailId === null) return;
+  if (!requireSession('请先登录，再删除评论。')) return;
+  const ownDetailRequest = detailRequest;
+  const videoId = detailId;
   button.disabled = true;
   try {
     await community.deleteComment(button.dataset.commentId);
-    await loadComments(detailId, byId('detail-comment-list'));
+    if (ownDetailRequest !== detailRequest || videoId !== detailId) return;
+    await loadComments(videoId, byId('detail-comment-list'));
   } catch (error) {
+    if (ownDetailRequest !== detailRequest) return;
     button.disabled = false;
     reportAppError(error);
   }
@@ -949,6 +1120,7 @@ try {
 
 renderDiscoverForm();
 renderProfileTabs();
-setMode('login', { focus: false });
+showGuestApp();
+selectView('discover', { focus: false });
 initCat();
 submit.disabled = false;

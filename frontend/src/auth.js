@@ -97,7 +97,7 @@ export function createAuthClient({ fetchImpl = globalThis.fetch, now = Date.now,
     return session;
   };
 
-  async function request(path, { method = 'GET', body, token } = {}) {
+  async function request(path, { method = 'GET', body, token, keepalive = false } = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     const headers = { Accept: 'application/json' };
@@ -110,6 +110,7 @@ export function createAuthClient({ fetchImpl = globalThis.fetch, now = Date.now,
         credentials: 'omit',
         cache: 'no-store',
         signal: controller.signal,
+        keepalive: Boolean(keepalive),
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
       let payload;
@@ -206,7 +207,23 @@ export function createAuthClient({ fetchImpl = globalThis.fetch, now = Date.now,
       }
     },
 
-    // 公开读取与受保护请求共用响应解析和错误映射，但不要求会话，也不发送 Bearer 令牌。
+    async requestWithOptionalSession(path, options = {}) {
+      const current = activeSession();
+      if (!current) return request(path, options);
+      const attempt = generation;
+      try {
+        return await request(path, { ...options, token: current.token });
+      } catch (error) {
+        // A stale optional credential must not turn a public GET into a login wall.
+        if (error.status === 401 && attempt === generation && (options.method ?? 'GET') === 'GET') {
+          clearSession();
+          return request(path, options);
+        }
+        throw error;
+      }
+    },
+
+    // 完全匿名的公开读取；需要 viewer_state 时使用 requestWithOptionalSession。
     async requestPublic(path, options = {}) {
       return request(path, options);
     },
