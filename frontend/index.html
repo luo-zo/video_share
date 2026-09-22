@@ -8,10 +8,10 @@
   <title>Video Share · 好奇心，即刻放映</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='17' fill='%23d5f478'/%3E%3Cpath d='M13 34 12 12l16 12h8l16-12-1 22q3 21-19 21T13 34' fill='%231a201d'/%3E%3Cellipse cx='23' cy='36' rx='5' ry='4' fill='%23d5f478'/%3E%3Cellipse cx='41' cy='36' rx='5' ry='4' fill='%23d5f478'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="/src/styles.css" />
-  <script type="module" src="/src/main.js"></script>
+  <script type="module" src="/src/main.ts"></script>
 </head>
 <body>
-  <a class="skip-link" href="#username">跳到登录表单</a>
+  <!-- 图标符号库是全局只读资源，放在挂载点之外，避免每个视图重复定义。 -->
   <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h15M13 5l7 7-7 7"/></symbol>
     <symbol id="i-diagonal" viewBox="0 0 24 24"><path d="M6 18 18 6M6 6h12v12"/></symbol>
@@ -21,151 +21,9 @@
     <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 2 2.5 7.5L22 12l-7.5 2.5L12 22l-2.5-7.5L2 12l7.5-2.5L12 2Z"/></symbol>
     <symbol id="i-play" viewBox="0 0 24 24"><path d="m9 5 11 7-11 7V5Z"/></symbol>
   </svg>
-  <div class="page-shell">
-    <header class="site-header">
-      <a class="brand" href="/" aria-label="Video Share 首页"><span class="brand-icon"><svg viewBox="0 0 36 36" aria-hidden="true"><path d="M7 19 6 5l9 8h6l9-8-1 14q2 12-11 12T7 19Z" fill="currentColor"/><path d="m15 18 8 4-8 4Z" fill="#eff0e9"/></svg></span><span class="brand-word">video<span>share</span><sup>®</sup></span><span class="brand-divider"></span><span class="brand-tagline">分享所爱</span></a>
-      <div class="header-invite"><span id="header-prompt">第一次来这里？</span><button class="text-button" id="mode-toggle" type="button"><span id="mode-toggle-label">创建账号</span><svg class="icon" aria-hidden="true"><use href="#i-diagonal"/></svg></button></div>
-    </header>
-
-    <main class="main-layout">
-      <section class="universe" aria-label="小黑猫陪你发现精彩">
-        <div class="universe-grain" aria-hidden="true"></div>
-        <div class="hero-topline"><span class="orbit-badge"><span class="live-dot"></span> THE LITTLE CINEMA</span><span class="hero-edition">VOL. 001 <svg class="hero-spark icon" aria-hidden="true"><use href="#i-spark"/></svg></span></div>
-        <div class="hero-heading"><p class="eyebrow">STAY CURIOUS. PRESS PLAY.</p><h1>好奇心，<br/>即刻<span class="highlight-word">放映<svg viewBox="0 0 200 18" preserveAspectRatio="none" aria-hidden="true"><path d="M3 11Q87-3 195 7M25 16Q112 6 177 13"/></svg></span>。</h1><p class="hero-subtitle">收藏生活里的小小心动，<br/>分享你眼中的大大世界。</p></div>
-
-        <div class="scene-sticker" aria-hidden="true"><svg class="icon"><use href="#i-spark"/></svg><span>保持好奇<br/><small>STAY CURIOUS</small></span></div>
-        <div class="cat-scene" aria-hidden="true">
-          <svg class="cat-art" viewBox="0 0 760 790" xmlns="http://www.w3.org/2000/svg">
-            <defs>
-              <radialGradient id="halo"><stop stop-color="#c5e18a" stop-opacity=".14"/><stop offset="1" stop-color="#c5e18a" stop-opacity="0"/></radialGradient>
-              <linearGradient id="moon" x1="0" y1="0" x2=".8" y2="1"><stop stop-color="#edf5be"/><stop offset="1" stop-color="#91b37c"/></linearGradient>
-              <linearGradient id="fur" x1="0" y1="0" x2="1" y2=".7"><stop stop-color="#29332f"/><stop offset=".5" stop-color="#17201c"/><stop offset="1" stop-color="#0d1512"/></linearGradient>
-              <radialGradient id="head-fur" cx=".3" cy=".1" r=".9"><stop stop-color="#323c36"/><stop offset=".55" stop-color="#1c2520"/><stop offset="1" stop-color="#0d1512"/></radialGradient>
-              <linearGradient id="eye-gold"><stop stop-color="#e7fda6"/><stop offset="1" stop-color="#b5d968"/></linearGradient>
-              <linearGradient id="paw-fur"><stop stop-color="#364138"/><stop offset="1" stop-color="#1a251e"/></linearGradient>
-              <linearGradient id="orbit-glint"><stop stop-color="#edfdbc"/><stop offset=".55" stop-color="#b1d067"/><stop offset="1" stop-color="#829955" stop-opacity=".2"/></linearGradient>
-            </defs>
-            <circle cx="470" cy="451" r="295" fill="url(#halo)"/>
-            <g fill="#c4d3b3" class="stars"><circle cx="64" cy="372" r="1.2"/><circle cx="277" cy="88" r="1"/><circle cx="637" cy="154" r="1.4"/><circle cx="706" cy="417" r="1"/><circle cx="214" cy="617" r="1.3"/><circle cx="325" cy="670" r="1"/><circle cx="602" cy="692" r="1.3"/><circle cx="116" cy="522" r="1"/></g>
-            <ellipse cx="477" cy="485" rx="266" ry="187" transform="rotate(-27 477 485)" fill="none" stroke="#becda8" stroke-opacity=".19" stroke-dasharray="2 9"/>
-            <circle cx="500" cy="406" r="172" fill="url(#moon)" opacity=".87"/>
-            <circle cx="500" cy="406" r="185" fill="none" stroke="#b6c89c" stroke-opacity=".2"/>
-            <g class="cat-character" id="cat-character">
-              <ellipse cx="470" cy="663" rx="102" ry="15" fill="#0b1711" opacity=".4"/>
-              <path class="cat-tail" d="M523 612C597 622 656 583 643 539c-8-28-45-31-50-8" fill="none" stroke="#15211a" stroke-width="33" stroke-linecap="round"/>
-              <path d="M401 488c-23 49-44 117-27 151 15 31 172 33 189-1 15-29-7-102-35-150Z" fill="url(#fur)"/>
-              <path d="M431 488c-13 50-23 109-7 146 14 10 69 8 82-2 17-41-2-100-20-144Z" fill="#64735b" opacity=".06"/>
-              <path d="M370 424q-13-47 10-87l-16-72q-3-20 13-10l55 41q31-11 65 0l45-42q15-14 11 9l-1 78q22 38 8 86-14 61-92 66-79-2-98-69Z" fill="url(#head-fur)" stroke="#6c7c61" stroke-opacity=".23" stroke-width="1.5"/>
-              <path d="m379 277 12 58 29-28Z" fill="#766d61" opacity=".48"/><path d="m537 277-30 31 30 25Z" fill="#766d61" opacity=".42"/>
-              <path d="m445 304 9 10m15-12 2 10m20-8-7 11" fill="none" stroke="#879079" stroke-opacity=".19" stroke-width="2" stroke-linecap="round"/>
-              <g class="cat-eyes">
-                <path d="M395 392q26-31 57 0-25 30-57 0Z" fill="url(#eye-gold)"/><path d="M484 392q28-31 57 0-28 30-57 0Z" fill="url(#eye-gold)"/>
-                <g class="cat-pupils" id="cat-pupils"><ellipse cx="428" cy="391" rx="7" ry="19" fill="#142019"/><ellipse cx="512" cy="391" rx="7" ry="19" fill="#142019"/><circle cx="431" cy="383" r="3" fill="#f6ffe2"/><circle cx="515" cy="383" r="3" fill="#f6ffe2"/></g>
-              </g>
-              <path d="m461 420 14 0-7 7Z" fill="#998c7e"/><path d="M468 427v7m0 0q-10 11-18 2m18-2q10 11 18 2" fill="none" stroke="#adb3a0" stroke-width="1.5" stroke-linecap="round" opacity=".75"/>
-              <g stroke="#bbc5ac" stroke-opacity=".45" fill="none" stroke-width="1.2" stroke-linecap="round"><path d="m438 429-53-10m53 19-60 1m62 9-48 12m107-31 54-10m-54 19 59 1m-61 9 48 12"/></g>
-              <path d="M414 482q55 26 106-2" fill="none" stroke="#b8d273" stroke-width="5"/>
-              <circle cx="467" cy="501" r="11" fill="#d5ef8a"/><path d="m465 496 6 5-6 4Z" fill="#34462b"/>
-              <ellipse cx="406" cy="643" rx="33" ry="18" fill="#202d23"/><ellipse cx="533" cy="643" rx="33" ry="18" fill="#18251d"/>
-              <g class="cat-paw cat-paw-left"><path d="M413 568q-21 0-23 24v38q1 25 24 25t24-24v-37q0-26-25-26Z" fill="url(#paw-fur)" stroke="#55624c" stroke-opacity=".25"/><path d="M405 638v11m11-11v12m10-12v9" fill="none" stroke="#6b7760" stroke-opacity=".5" stroke-linecap="round"/></g>
-              <g class="cat-paw cat-paw-right"><path d="M516 568q-22 0-24 24v38q1 25 24 25t24-24v-37q0-26-24-26Z" fill="url(#paw-fur)" stroke="#55624c" stroke-opacity=".25"/><path d="M506 638v11m11-11v12m10-12v9" fill="none" stroke="#6b7760" stroke-opacity=".5" stroke-linecap="round"/></g>
-            </g>
-            <ellipse cx="469" cy="652" rx="206" ry="39" transform="rotate(-13 469 652)" fill="none" stroke="url(#orbit-glint)" stroke-width="1.8"/>
-            <g transform="translate(278 608)"><rect x="-20" y="-20" width="40" height="40" rx="12" fill="#d5f478" transform="rotate(-12)"/><path d="m-4-8 13 8-13 8Z" fill="#34452d"/></g>
-            <g transform="translate(628 224)" fill="none" stroke="#d5eaa1" stroke-width="1.1"><path d="M-9 0H9M0-9V9"/><circle r="18" stroke-opacity=".3"/></g>
-            <path d="m233 447 3 9 9 3-9 3-3 9-3-9-9-3 9-3Z" fill="#d5eaa1" opacity=".7"/>
-            <text x="590" y="735" fill="#a4b491" font-family="monospace" font-size="8" letter-spacing="2">CAT. 001 / ON AIR</text>
-          </svg>
-          <span class="cat-orbit-label">A LITTLE CAT. A WORLD OF STORIES.</span>
-        </div>
-        <div class="film-note" aria-hidden="true"><span class="film-note-icon"><svg class="icon"><use href="#i-play"/></svg></span><span><small>生活里的隐藏彩蛋</small><strong>一点可爱，刚刚好。</strong></span><svg class="icon film-note-spark"><use href="#i-spark"/></svg></div>
-        <div class="hero-bottom"><div class="cat-caption"><span class="caption-line"></span><div><p id="cat-caption">小黑已就位，等你好久了。</p><span>你的每一份热爱，都值得被看见。</span></div></div><span class="hero-coordinate">CURIOUS BY NATURE<br/>∞ STORIES TO COME</span></div>
-        <div class="hero-progress" aria-hidden="true"><span class="progress-number">01 /</span><span class="progress-caption">你的故事，即将开场</span><span class="film-perforations"></span></div>
-      </section>
-
-      <section class="login-section" aria-label="账号登录与注册">
-        <div id="auth-view" class="login-content">
-          <div class="form-emblem" aria-hidden="true"><svg viewBox="0 0 64 64"><path d="M13 34 12 12l16 12h8l16-12-1 22q3 21-19 21T13 34" fill="currentColor"/><path d="m28 31 13 7-13 7Z" fill="#e1efca"/></svg><span><svg class="icon"><use href="#i-spark"/></svg></span></div>
-          <div class="form-heading"><div class="welcome-kicker"><span></span><span id="auth-kicker">GOOD TO SEE YOU AGAIN</span></div><h2><span id="auth-title">好久不见，欢迎回来</span><svg class="heading-spark icon" aria-hidden="true"><use href="#i-spark"/></svg></h2><p id="auth-description">登录账号，继续发现你喜欢的世界。</p></div>
-          <div class="login-method"><span class="method-icon"><svg class="icon" aria-hidden="true"><use href="#i-user"/></svg></span><span id="auth-method-label">账号密码登录</span><span class="method-line"></span><span class="method-index">01</span></div>
-          <form id="auth-form" novalidate>
-            <div class="field-group" id="username-field"><label for="username">用户名</label><div class="input-wrap"><svg class="icon input-icon" aria-hidden="true"><use href="#i-user"/></svg><input id="username" type="text" autocomplete="username" placeholder="输入你的用户名" autocapitalize="none" spellcheck="false" aria-describedby="username-error" required/></div><p id="username-error" class="field-error" aria-live="polite"></p></div>
-            <div class="field-group" id="nickname-field" hidden><label for="nickname">昵称</label><div class="input-wrap"><svg class="icon input-icon" aria-hidden="true"><use href="#i-spark"/></svg><input id="nickname" type="text" autocomplete="nickname" placeholder="我们该怎么称呼你？" aria-describedby="nickname-error"/></div><p id="nickname-error" class="field-error" aria-live="polite"></p></div>
-            <div class="field-group" id="password-field"><div class="field-label-row"><label for="password">密码</label><span class="password-hint">嘘，小黑会替你保密</span></div><div class="input-wrap"><svg class="icon input-icon" aria-hidden="true"><use href="#i-lock"/></svg><input id="password" type="password" autocomplete="current-password" placeholder="输入你的密码" aria-describedby="password-error" required/><button id="toggle-password" type="button" class="password-toggle" aria-pressed="false" aria-controls="password"><svg class="icon" aria-hidden="true"><use href="#i-eye"/></svg><span id="toggle-password-label" class="sr-only">显示密码</span></button></div><p id="password-error" class="field-error" aria-live="polite"></p></div>
-            <label id="remember-option" class="remember-option"><input id="remember" type="checkbox"/><span class="checkbox-visual" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="m3 8 3 3 7-7"/></svg></span><span>记住我的用户名</span></label>
-            <button type="submit" id="submit-button" class="submit-button" disabled><span id="submit-label">登录，开启好奇之旅</span><span class="submit-icon"><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></span></button>
-            <p id="form-message" class="form-message" role="status" aria-live="polite"></p>
-            <noscript><p class="field-error">请启用 JavaScript 后登录。</p></noscript>
-          </form>
-          <p class="switch-prompt"><span id="switch-copy">还没有自己的账号？</span><button type="button" id="switch-mode" class="text-button"><span id="switch-label">现在加入</span><svg class="icon" aria-hidden="true"><use href="#i-diagonal"/></svg></button></p>
-          <p class="switch-prompt"><span>暂时不登录？</span><button type="button" id="browse-guest" class="text-button">先看看公开视频</button></p>
-          <div class="form-footnote"><svg class="icon" aria-hidden="true"><use href="#i-spark"/></svg><span>和有趣的灵魂，分享同一个世界。</span></div>
-        </div>
-        <div id="account-view" class="account-view app-view" hidden>
-          <header class="app-header">
-            <div class="app-identity">
-              <span class="app-avatar" aria-hidden="true"><svg viewBox="0 0 64 64"><path d="M13 34 12 12l16 12h8l16-12-1 22q3 21-19 21T13 34" fill="currentColor"/><ellipse cx="23" cy="36" rx="5" ry="4" fill="#d5f478"/><ellipse cx="41" cy="36" rx="5" ry="4" fill="#d5f478"/></svg></span>
-              <span><small>WELCOME BACK</small><strong id="account-nickname" tabindex="-1"></strong><span class="sr-only" id="account-username"></span><span class="sr-only" id="account-id"></span><span class="sr-only" id="account-created"></span></span>
-            </div>
-            <nav class="app-nav" aria-label="视频功能">
-              <button type="button" class="app-nav-button is-active" data-app-view="discover" aria-current="page">发现</button>
-              <button type="button" class="app-nav-button" data-app-view="upload" data-session-required>投稿</button>
-              <button type="button" class="app-nav-button" data-app-view="mine" data-session-required>我的</button>
-            </nav>
-            <button id="signout" type="button" class="signout-button">退出</button>
-          </header>
-
-          <p id="app-message" class="app-message" role="status" aria-live="polite"></p>
-          <div id="app-content" class="app-content">
-            <section id="discover-panel" class="app-panel" data-app-panel="discover" aria-labelledby="discover-title">
-              <div class="panel-heading"><div><span class="panel-kicker">FRESH FROM THE WORLD</span><h2 id="discover-title" tabindex="-1">发现新鲜故事</h2><p>看看大家最近按下了哪一帧。</p></div><button id="refresh-discover" type="button" class="soft-button">刷新</button></div>
-              <div class="discover-tools">
-                <div id="discover-search"></div>
-                <p id="discover-summary" class="discover-summary" aria-live="polite"></p>
-              </div>
-              <div id="discover-list" class="list-mount" aria-live="polite"></div>
-              <div id="discover-pagination" class="pagination-mount"></div>
-            </section>
-
-            <section id="detail-panel" class="app-panel detail-panel" data-app-panel="detail" aria-labelledby="detail-title" hidden>
-              <button id="detail-back" type="button" class="text-button detail-back"><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg><span id="detail-back-label">返回发现</span></button>
-              <div id="video-detail" class="video-detail"></div>
-              <div id="detail-actions" class="detail-actions" hidden></div>
-              <div id="detail-owner" class="detail-owner" hidden></div>
-              <section id="detail-comments" class="detail-comments" aria-labelledby="detail-comments-title" hidden>
-                <h3 id="detail-comments-title" class="comments-heading">评论</h3>
-                <div id="detail-comment-composer"></div>
-                <div id="detail-comment-list"></div>
-              </section>
-            </section>
-
-            <section id="upload-panel" class="app-panel" data-app-panel="upload" aria-labelledby="upload-title" hidden>
-              <div class="panel-heading"><div><span class="panel-kicker">SHARE YOUR FRAME</span><h2 id="upload-title" tabindex="-1">投递一段心动</h2><p>选择 MP4，我们会把它安全送往放映厅。</p></div></div>
-              <form id="upload-form" class="upload-form" novalidate>
-                <div class="upload-fields">
-                  <div class="field-group"><label for="video-title">视频标题</label><input id="video-title" name="title" type="text" maxlength="100" placeholder="给这一帧取个名字" aria-describedby="video-title-error" required/><p id="video-title-error" class="field-error" aria-live="polite"></p></div>
-                  <div class="field-group"><label for="video-description">视频简介 <span>选填</span></label><textarea id="video-description" name="description" maxlength="2000" rows="5" placeholder="讲讲镜头外的小故事" aria-describedby="video-description-error"></textarea><p id="video-description-error" class="field-error" aria-live="polite"></p></div>
-                  <div class="field-group"><label for="video-file">MP4 文件</label><label class="file-picker" for="video-file"><input id="video-file" name="file" type="file" accept="video/mp4,.mp4" aria-describedby="video-file-name video-file-error" required/><span>选择视频</span><strong id="video-file-name">尚未选择文件</strong></label><p id="video-file-error" class="field-error" aria-live="polite"></p></div>
-                </div>
-                <aside class="upload-journey" aria-label="投稿进度">
-                  <span class="panel-kicker">FOUR STEPS TO SCREEN</span><ol id="upload-steps"><li data-upload-step="creating"><span>01</span><div><strong>创建投稿</strong><small>登记标题与文件信息</small></div></li><li data-upload-step="uploading"><span>02</span><div><strong>PUT 直传</strong><small>视频直接送往存储空间</small></div></li><li data-upload-step="completing"><span>03</span><div><strong>确认完成</strong><small>校验文件并创建处理任务</small></div></li><li data-upload-step="processing"><span>04</span><div><strong>转码发布</strong><small>生成封面与多清晰度 HLS</small></div></li></ol>
-                  <button id="upload-submit" type="submit" class="submit-button"><span>开始投稿</span><span class="submit-icon"><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></span></button>
-                </aside>
-              </form>
-            </section>
-
-            <section id="mine-panel" class="app-panel" data-app-panel="mine" aria-labelledby="mine-title" hidden>
-              <div class="panel-heading"><div><span class="panel-kicker">YOUR SCREENING ROOM</span><h2 id="mine-title" tabindex="-1">我的</h2><p>投稿、收藏、历史与关注，都收在这里。</p></div><button id="refresh-mine" type="button" class="soft-button">刷新</button></div>
-              <div id="mine-tabs" class="profile-tabs-mount"></div>
-              <div id="mine-list" class="list-mount" aria-live="polite"></div>
-              <div id="mine-pagination" class="pagination-mount"></div>
-            </section>
-          </div>
-        </div>
-        <div class="login-section-index" aria-hidden="true"><span>A NEW PERSPECTIVE STARTS WITH YOU.</span><svg class="icon"><use href="#i-diagonal"/></svg></div>
-      </section>
-    </main>
-    <footer class="site-footer"><span>© 2026 video_share</span><span class="footer-center"><span></span> 让每一帧，都有共鸣。</span><span class="footer-signature">MADE FOR CURIOUS MINDS <svg class="icon" aria-hidden="true"><use href="#i-spark"/></svg></span></footer>
-  </div>
+  <div id="app"></div>
+  <noscript>
+    <p class="form-message is-error">请启用 JavaScript 后继续。</p>
+  </noscript>
 </body>
 </html>

@@ -13,7 +13,7 @@ test('targets the backend port configured by this project by default', () => {
 
 test('application document loads the JavaScript module entrypoint', async () => {
   const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
-  assert.match(html, /<script\s+type="module"\s+src="\/src\/main\.js"><\/script>/);
+  assert.match(html, /<script\s+type="module"\s+src="\/src\/main\.ts"><\/script>/);
 });
 
 let rootDir;

@@ -1,6 +1,6 @@
 # Video Share 前端
 
-前端使用原生 HTML、CSS 和 JavaScript。Node 本地服务器负责静态文件和受限制的同源 API 代理；视频文件使用后端返回的预签名 URL 直接上传到 MinIO，Chrome 等浏览器通过本地安装的 `hls.js` 播放第三阶段生成的 HLS。
+前端现使用 Vue 3、TypeScript、Vite、Vue Router 和 Pinia。Vite 开发服务器复用旧 `server.mjs` 的 API 安全中间件，因此仍保留路径与方法白名单、写请求 Origin 校验、请求体限制、上游超时和安全响应头；`server.mjs` 只作为迁移期兼容入口。视频使用后端返回的预签名 URL 直传 MinIO，并通过 `hls.js` 播放 HLS。
 
 ## 已实现页面
 
@@ -11,14 +11,14 @@
 - 个人中心：分页查看“我的投稿”“我的收藏”“观看历史”“我的关注”四个标签页。
 - 加载、空列表、错误反馈、键盘焦点、响应式布局和减少动画偏好。
 
-JWT 只保存在当前页面内存中，刷新页面后需要重新登录。“记住我的用户名”只保存用户名，不保存密码或令牌。
+JWT 只保存在当前页面内存中，刷新页面后需要重新登录；持久刷新会话留到 T03。“记住我的用户名”只保存用户名，不保存密码或令牌。
 
 ## 启动
 
 先确保 Go 后端运行于 `http://127.0.0.1:8081`，MinIO 运行于 `http://127.0.0.1:9000`，然后在 `frontend` 目录执行：
 
 ```powershell
-npm.cmd install
+npm.cmd ci
 npm.cmd run dev
 ```
 
@@ -37,9 +37,10 @@ npm.cmd run dev
 ## 验证
 
 ```powershell
-node --check server.mjs
-node --check src/main.js
+npm.cmd run typecheck
 npm.cmd test
+npm.cmd run build
+npm.cmd run test:e2e
 ```
 
-测试覆盖输入校验、令牌生命周期、视频 API 调用顺序、异步状态轮询、MP4/HLS 播放选择、直传失败处理、社区互动客户端（搜索、点赞、收藏、评论、关注和四个个人中心标签页）、静态文件、安全响应头、API 路由白名单、MinIO 安全跳转、请求限制和代理超时。
+`npm test` 同时运行 Vitest/Vue Test Utils 用例和迁移期保留的全部 `node:test` 纯函数/代理用例。Playwright 覆盖可分享深链以及搜索、分页在浏览器前进后退中的恢复；首次运行前需要执行 `npx playwright install chromium`。
