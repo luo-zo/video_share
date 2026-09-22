@@ -22,6 +22,8 @@ backend: go run ./cmd/api migrate up
     ↓
 backend: go run ./cmd/api
     ↓
+frontend: npm.cmd ci
+    ↓
 frontend: npm.cmd run dev
     ↓
 浏览器打开 http://127.0.0.1:5173
@@ -33,8 +35,8 @@ frontend: npm.cmd run dev
 
 - 后端：Go、Gin、GORM、Goose、JWT。
 - 数据：MySQL 保存业务元数据，MinIO 保存 MP4 文件。
-- 前端：原生 HTML、CSS、JavaScript，Node 同源代理。
+- 前端：Vue 3、TypeScript、Vite、Vue Router、Pinia；开发期由 Vite 复用旧 Node 同源代理中间件承担 API 安全边界。
 - 本地环境：Docker Compose。
-- 验证：Go `testing`、`go vet`、Node `node:test`，以及 `backend/scripts/` 下的端到端验收脚本。
+- 验证：Go `testing`、`go vet`、`vue-tsc` 类型检查、Vitest、迁移期保留的 `node:test`、Playwright E2E，以及 `backend/scripts/` 下的端到端验收脚本。
 
 下一阶段适合加入弹幕、通知和推荐，把现有的互动数据用起来。

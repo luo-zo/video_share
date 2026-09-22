@@ -38,7 +38,7 @@ const fixedApiRoutes = new Map([
 // 这些方法可以携带请求体；没有请求体的删除调用仍然直接转发。
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
-function methodsForAPIPath(route) {
+export function methodsForAPIPath(route) {
   const fixed = fixedApiRoutes.get(route);
   if (fixed) return fixed;
   if (/^\/api\/v1\/videos\/[1-9]\d*$/.test(route)) return ['GET'];
@@ -69,7 +69,7 @@ class RequestError extends Error {
   }
 }
 
-function securityHeaders(response, storageOrigin) {
+export function securityHeaders(response, storageOrigin) {
   response.setHeader('X-Content-Type-Options', 'nosniff');
   response.setHeader('Referrer-Policy', 'no-referrer');
   response.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
@@ -97,7 +97,7 @@ function sendError(response, status, code, message) {
   response.end(JSON.stringify({ error: { code, message } }));
 }
 
-function isLocalOrigin(request) {
+export function isLocalOrigin(request) {
   try {
     const frontend = new URL(`http://${request.headers.host}`);
     const port = Number(frontend.port || 80);
@@ -208,13 +208,7 @@ function callUpstream(target, request, route, body, timeoutMs) {
   });
 }
 
-export function createFrontendServer({
-  rootDir = directory,
-  apiTarget = process.env.API_TARGET || DEFAULT_API_TARGET,
-  storageOrigin = process.env.STORAGE_ORIGIN || DEFAULT_STORAGE_ORIGIN,
-  timeoutMs = 12_000,
-  maxBodyBytes = 32 * 1024,
-} = {}) {
+export function resolveOrigins(apiTarget, storageOrigin) {
   const target = new URL(apiTarget);
   if (!['http:', 'https:'].includes(target.protocol) || target.username || target.password
     || target.pathname !== '/' || target.search || target.hash) {
@@ -231,30 +225,29 @@ export function createFrontendServer({
       || (storage.protocol !== 'https:' && !storageLoopback)) {
     throw new Error('STORAGE_ORIGIN must be an HTTPS origin, or a loopback HTTP origin.');
   }
+  return { target, storage };
+}
 
-  return http.createServer(async (request, response) => {
+// 同一份安全与转发逻辑同时驱动旧的独立前端服务和 Vite 开发服务器，避免两套代理行为漂移。
+// 作为中间件使用时，非 API 路径交给 next()，由调用方决定静态资源或 404 的处理。
+export function createApiMiddleware({
+  apiTarget = process.env.API_TARGET || DEFAULT_API_TARGET,
+  storageOrigin = process.env.STORAGE_ORIGIN || DEFAULT_STORAGE_ORIGIN,
+  timeoutMs = 12_000,
+  maxBodyBytes = 32 * 1024,
+} = {}) {
+  const { target, storage } = resolveOrigins(apiTarget, storageOrigin);
+
+  return async function apiMiddleware(request, response, next) {
     securityHeaders(response, storage.origin);
     // Match the raw path: encoded traversal and alternate spellings never map to disk.
     const route = (request.url || '').split('?')[0];
-    const staticFile = staticFiles.get(route);
     const apiMethods = methodsForAPIPath(route);
     try {
-      if (staticFile) {
-        if (!['GET', 'HEAD'].includes(request.method)) {
-          response.setHeader('Allow', 'GET, HEAD');
-          throw new RequestError(405, 'METHOD_NOT_ALLOWED', 'This resource supports GET and HEAD.');
-        }
-        const [filename, contentType] = staticFile;
-        const body = await readFile(path.join(rootDir, filename));
-        response.writeHead(200, {
-          'Content-Type': contentType,
-          'Content-Length': body.length,
-          'Cache-Control': 'no-cache',
-        });
-        response.end(request.method === 'HEAD' ? undefined : body);
+      if (!apiMethods) {
+        next();
         return;
       }
-      if (!apiMethods) throw new RequestError(404, 'NOT_FOUND', 'Resource not found.');
       if (!apiMethods.includes(request.method)) {
         const allowed = apiMethods.join(', ');
         response.setHeader('Allow', allowed);
@@ -297,6 +290,55 @@ export function createFrontendServer({
       else if (error.code === 'ENOENT') sendError(response, 404, 'NOT_FOUND', 'Resource not found.');
       else sendError(response, 500, 'INTERNAL_ERROR', 'Unable to serve this request.');
     }
+  };
+}
+
+export function createFrontendServer({
+  rootDir = directory,
+  apiTarget = process.env.API_TARGET || DEFAULT_API_TARGET,
+  storageOrigin = process.env.STORAGE_ORIGIN || DEFAULT_STORAGE_ORIGIN,
+  timeoutMs = 12_000,
+  maxBodyBytes = 32 * 1024,
+} = {}) {
+  const { storage } = resolveOrigins(apiTarget, storageOrigin);
+  const apiMiddleware = createApiMiddleware({ apiTarget, storageOrigin, timeoutMs, maxBodyBytes });
+
+  async function serveStatic(request, response) {
+    securityHeaders(response, storage.origin);
+    // Match the raw path: encoded traversal and alternate spellings never map to disk.
+    const route = (request.url || '').split('?')[0];
+    const staticFile = staticFiles.get(route);
+    try {
+      if (!staticFile) throw new RequestError(404, 'NOT_FOUND', 'Resource not found.');
+      if (!['GET', 'HEAD'].includes(request.method)) {
+        response.setHeader('Allow', 'GET, HEAD');
+        throw new RequestError(405, 'METHOD_NOT_ALLOWED', 'This resource supports GET and HEAD.');
+      }
+      const [filename, contentType] = staticFile;
+      const body = await readFile(path.join(rootDir, filename));
+      response.writeHead(200, {
+        'Content-Type': contentType,
+        'Content-Length': body.length,
+        'Cache-Control': 'no-cache',
+      });
+      response.end(request.method === 'HEAD' ? undefined : body);
+    } catch (error) {
+      request.resume();
+      if (!request.complete) response.setHeader('Connection', 'close');
+      if (error instanceof RequestError) sendError(response, error.status, error.code, error.message);
+      else if (error.code === 'ENOENT') sendError(response, 404, 'NOT_FOUND', 'Resource not found.');
+      else sendError(response, 500, 'INTERNAL_ERROR', 'Unable to serve this request.');
+    }
+  }
+
+  return http.createServer((request, response) => {
+    const route = (request.url || '').split('?')[0];
+    if (staticFiles.has(route) || !methodsForAPIPath(route)) {
+      return serveStatic(request, response);
+    }
+    return apiMiddleware(request, response, () => {
+      sendError(response, 404, 'NOT_FOUND', 'Resource not found.');
+    });
   });
 }
 

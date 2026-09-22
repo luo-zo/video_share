@@ -3,16 +3,36 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Video Share login frontend with a local same-origin API proxy",
+  "description": "Video Share frontend — Vue 3 + TypeScript + Vite single-page application",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12.0 <23"
   },
   "scripts": {
-    "dev": "node server.mjs",
-    "start": "node server.mjs",
-    "test": "node --test"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json",
+    "test:unit": "vitest run",
+    "test:legacy": "node --test tests/auth.test.mjs tests/video.test.mjs tests/community.test.mjs tests/player.test.mjs tests/discover-view.test.mjs tests/detail-view.test.mjs tests/profile-view.test.mjs tests/server.test.mjs",
+    "test": "npm run test:unit && npm run test:legacy",
+    "test:e2e": "playwright test",
+    "legacy:serve": "node server.mjs"
   },
   "dependencies": {
-    "hls.js": "1.7.3"
+    "hls.js": "1.7.3",
+    "pinia": "3.0.4",
+    "vue": "3.5.43",
+    "vue-router": "4.6.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "22.20.4",
+    "@vitejs/plugin-vue": "6.0.9",
+    "@vue/test-utils": "2.5.1",
+    "jsdom": "26.1.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.6",
+    "vitest": "3.2.7",
+    "vue-tsc": "3.0.11"
   }
 }
