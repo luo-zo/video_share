@@ -11,6 +11,7 @@ import {
 const DEV_PORT = 5173;
 const BLOCKED_DEV_FILES = new Set([
   '/.nvmrc',
+  '/legacy.html',
   '/package.json',
   '/package-lock.json',
   '/playwright.config.ts',
@@ -21,16 +22,42 @@ const BLOCKED_DEV_FILES = new Set([
   '/tsconfig.node.json',
   '/vite.config.ts',
 ]);
+const BLOCKED_LEGACY_SOURCES = new Set([
+  '/src/auth.js',
+  '/src/cat.js',
+  '/src/community.js',
+  '/src/detail-view.js',
+  '/src/discover-view.js',
+  '/src/main.js',
+  '/src/player.js',
+  '/src/profile-view.js',
+  '/src/video.js',
+  '/src/view-kit.js',
+  '/vendor/hls.mjs',
+]);
 
 export function isBlockedDevPath(rawPath: string): boolean {
-  let decoded: string;
+  let decoded = rawPath;
   try {
-    decoded = decodeURIComponent(rawPath).replaceAll('\\', '/').toLowerCase();
+    for (let round = 0; round < 5; round += 1) {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) break;
+      decoded = next;
+      if (round === 4) return true;
+    }
   } catch {
     return true;
   }
-  if (decoded.split('/').some((part) => part === '.' || part === '..')) return true;
+  decoded = decoded.replaceAll('\\', '/').toLowerCase();
+  const segments = decoded.split('/').filter(Boolean);
+  if (segments.some((part) => part === '.' || part === '..')) return true;
+  if (segments.some((part, index) => (
+    part.startsWith('.') && !(part === '.vite' && segments[index - 1] === 'node_modules')
+  ))) return true;
+  if (decoded === '/@fs' || decoded.startsWith('/@fs/')) return true;
   return BLOCKED_DEV_FILES.has(decoded)
+    || BLOCKED_LEGACY_SOURCES.has(decoded)
+    || decoded.startsWith('/dist/')
     || decoded.startsWith('/tests/')
     || decoded.startsWith('/test-results/')
     || decoded.startsWith('/playwright-report/');

@@ -67,7 +67,8 @@ export function createAppRouter() {
     if (to.name === 'login') {
       return auth.isAuthenticated ? { path: safeReturnTo(to.query.returnTo, '/') } : true;
     }
-    if (to.meta.requiresSession && !auth.isAuthenticated) {
+    const ownerDetail = to.name === 'video-detail' && to.query.owner === '1';
+    if ((to.meta.requiresSession || ownerDetail) && !auth.isAuthenticated) {
       return { name: 'login', query: { returnTo: safeReturnTo(to.fullPath, '/') } };
     }
     return true;
