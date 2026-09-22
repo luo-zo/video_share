@@ -208,6 +208,7 @@ export interface UploadRequest {
   headers: Record<string, string>;
   credentials: RequestCredentials;
   body: UploadFile;
+  signal?: AbortSignal;
 }
 
 export type UploadFetch = (url: string, init: UploadRequest) => Promise<MinimalResponse>;
@@ -224,7 +225,7 @@ export interface SessionRequester {
 export interface VideoClientOptions {
   authClient?: SessionRequester;
   fetchImpl?: UploadFetch;
-  sleep?: (milliseconds: number) => Promise<void>;
+  sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
   now?: () => number;
 }
 
@@ -233,11 +234,13 @@ export interface ListVideosOptions {
   sort?: unknown;
   page?: unknown;
   pageSize?: unknown;
+  signal?: AbortSignal;
 }
 
 export interface PageOptions {
   page?: unknown;
   pageSize?: unknown;
+  signal?: AbortSignal;
 }
 
 export interface WaitOptions {
@@ -249,13 +252,14 @@ export interface WaitOptions {
 
 export interface UploadOptions {
   onStep?: (step: UploadStep) => void;
+  signal?: AbortSignal;
 }
 
 export interface VideoClient {
   listVideos(options?: ListVideosOptions): Promise<VideoList>;
-  getVideo(id: unknown): Promise<VideoItem>;
+  getVideo(id: unknown, options?: { signal?: AbortSignal }): Promise<VideoItem>;
   listMyVideos(options?: PageOptions): Promise<VideoList>;
-  getMyVideo(id: unknown): Promise<VideoItem>;
+  getMyVideo(id: unknown, options?: { signal?: AbortSignal }): Promise<VideoItem>;
   updateVideo(id: unknown, input: VideoPatchInput): Promise<VideoItem>;
   deleteVideo(id: unknown): Promise<VideoItem>;
   waitUntilProcessed(id: unknown, options?: WaitOptions): Promise<VideoItem>;
@@ -265,7 +269,7 @@ export interface VideoClient {
 export function createVideoClient({
   authClient,
   fetchImpl = globalThis.fetch as unknown as UploadFetch,
-  sleep = (milliseconds: number) => new Promise<void>((resolve) => { setTimeout(resolve, milliseconds); }),
+  sleep,
   now = Date.now,
 }: VideoClientOptions = {}): VideoClient {
   if (!authClient || typeof authClient.requestWithSession !== 'function'
@@ -274,6 +278,23 @@ export function createVideoClient({
     throw new TypeError('createVideoClient requires an auth client');
   }
   const session: SessionRequester = authClient;
+  const pause = sleep ?? ((milliseconds: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new VideoError('处理状态查询已取消。', { code: 'REQUEST_CANCELLED' }));
+      return;
+    }
+    const finish = (): void => {
+      signal?.removeEventListener('abort', cancel);
+      resolve();
+    };
+    const timer = setTimeout(finish, milliseconds);
+    const cancel = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', cancel);
+      reject(new VideoError('处理状态查询已取消。', { code: 'REQUEST_CANCELLED' }));
+    };
+    signal?.addEventListener('abort', cancel, { once: true });
+  }));
 
   const pagePath = (path: string, page: unknown, pageSize: unknown): string => {
     const query = new URLSearchParams({
@@ -301,21 +322,21 @@ export function createVideoClient({
     return encodeURIComponent(String(id));
   };
 
-  const getMyVideo = async (id: unknown): Promise<VideoItem> => videoFrom(
-    await session.requestWithSession(`/users/me/videos/${checkedID(id)}`),
+  const getMyVideo = async (id: unknown, { signal }: { signal?: AbortSignal } = {}): Promise<VideoItem> => videoFrom(
+    await session.requestWithSession(`/users/me/videos/${checkedID(id)}`, { signal }),
   );
 
   return {
-    async listVideos({ query, sort, page = 1, pageSize = DEFAULT_PAGE_SIZE }: ListVideosOptions = {}): Promise<VideoList> {
-      return listFrom(await session.requestPublic(discoveryPath({ query, sort, page, pageSize })));
+    async listVideos({ query, sort, page = 1, pageSize = DEFAULT_PAGE_SIZE, signal }: ListVideosOptions = {}): Promise<VideoList> {
+      return listFrom(await session.requestPublic(discoveryPath({ query, sort, page, pageSize }), { signal }));
     },
 
-    async getVideo(id: unknown): Promise<VideoItem> {
-      return videoFrom(await session.requestWithOptionalSession(`/videos/${checkedID(id)}`));
+    async getVideo(id: unknown, { signal }: { signal?: AbortSignal } = {}): Promise<VideoItem> {
+      return videoFrom(await session.requestWithOptionalSession(`/videos/${checkedID(id)}`, { signal }));
     },
 
-    async listMyVideos({ page = 1, pageSize = DEFAULT_PAGE_SIZE }: PageOptions = {}): Promise<VideoList> {
-      return listFrom(await session.requestWithSession(pagePath('/users/me/videos', page, pageSize)));
+    async listMyVideos({ page = 1, pageSize = DEFAULT_PAGE_SIZE, signal }: PageOptions = {}): Promise<VideoList> {
+      return listFrom(await session.requestWithSession(pagePath('/users/me/videos', page, pageSize), { signal }));
     },
 
     getMyVideo,
@@ -351,18 +372,18 @@ export function createVideoClient({
         if (signal?.aborted) {
           throw new VideoError('处理状态查询已取消。', { code: 'REQUEST_CANCELLED' });
         }
-        const item = await getMyVideo(id);
+        const item = await getMyVideo(id, { signal });
         onUpdate(item);
         const status = item.status;
         if (typeof status === 'string' && PROCESSING_STATES.includes(status)) return item;
         if (now() >= deadline) {
           throw new VideoError('视频仍在处理中，请稍后到“我的投稿”查看。', { code: 'PROCESSING_TIMEOUT' });
         }
-        await sleep(intervalMs);
+        await pause(intervalMs, signal);
       }
     },
 
-    async uploadVideo(input: VideoSubmissionInput, { onStep = () => {} }: UploadOptions = {}): Promise<VideoItem> {
+    async uploadVideo(input: VideoSubmissionInput, { onStep = () => {}, signal }: UploadOptions = {}): Promise<VideoItem> {
       const validation = validateVideoSubmission(input);
       if (!validation.valid) {
         throw new VideoError('请检查投稿信息。', {
@@ -389,6 +410,7 @@ export function createVideoClient({
           content_type: contentType,
           file_size: file.size,
         },
+        signal,
       }));
       const uploadUrl = created.upload_url;
       if (typeof uploadUrl !== 'string' || !uploadUrl) {
@@ -403,6 +425,7 @@ export function createVideoClient({
           headers: { 'Content-Type': contentType },
           credentials: 'omit',
           body: file,
+          ...(signal ? { signal } : {}),
         });
       } catch {
         throw new VideoError('视频直传失败，请检查网络后重试。', { code: 'UPLOAD_NETWORK_ERROR' });
@@ -417,7 +440,7 @@ export function createVideoClient({
       onStep('completing');
       const completed = videoFrom(await session.requestWithSession(
         `/videos/${encodeURIComponent(String(created.id))}/complete`,
-        { method: 'POST', body: {} },
+        { method: 'POST', body: {}, signal },
       ));
       onStep(completed.status === 'processing' ? 'processing' : 'complete');
       return completed;

@@ -16,12 +16,23 @@ test('application document loads the JavaScript module entrypoint', async () => 
   assert.match(html, /<script\s+type="module"\s+src="\/src\/main\.ts"><\/script>/);
 });
 
+test('legacy server homepage loads its allowlisted runnable entrypoint', async (t) => {
+  const origin = await listen(createFrontendServer(), t);
+  const homepage = await rawRequest(origin, '/');
+  assert.equal(homepage.status, 200);
+  assert.match(homepage.body, /id="auth-form"/);
+  assert.match(homepage.body, /<script\s+type="module"\s+src="\/src\/main\.js"><\/script>/);
+  const entry = await rawRequest(origin, '/src/main.js');
+  assert.equal(entry.status, 200);
+  assert.match(entry.headers['content-type'], /javascript/);
+});
+
 let rootDir;
 before(async () => {
   rootDir = await mkdtemp(path.join(os.tmpdir(), 'video-share-frontend-'));
   await mkdir(path.join(rootDir, 'src'));
   await mkdir(path.join(rootDir, 'node_modules', 'hls.js', 'dist'), { recursive: true });
-  await writeFile(path.join(rootDir, 'index.html'), '<!doctype html><title>Video Share</title>');
+  await writeFile(path.join(rootDir, 'legacy.html'), '<!doctype html><title>Video Share</title>');
   await writeFile(path.join(rootDir, 'src', 'main.js'), 'export const ready = true;');
   await writeFile(path.join(rootDir, 'node_modules', 'hls.js', 'dist', 'hls.mjs'), 'export default class Hls {}');
   await writeFile(path.join(rootDir, 'secret.txt'), 'must never be served');

@@ -175,6 +175,7 @@ export interface CommunityClientOptions {
 export interface PageOptions {
   page?: unknown;
   pageSize?: unknown;
+  signal?: AbortSignal;
 }
 
 export interface WatchReportOptions {
@@ -219,9 +220,10 @@ export function createCommunityClient({ authClient }: CommunityClientOptions = {
   });
 
   return {
-    async listComments(id: unknown, { page = 1, pageSize = DEFAULT_PAGE_SIZE }: PageOptions = {}): Promise<CommunityList<CommentItem>> {
+    async listComments(id: unknown, { page = 1, pageSize = DEFAULT_PAGE_SIZE, signal }: PageOptions = {}): Promise<CommunityList<CommentItem>> {
       return listFrom<CommentItem>(await session.requestPublic(
         pagePath(`/videos/${videoID(id)}/comments`, page, pageSize),
+        { signal },
       ));
     },
 
@@ -268,16 +270,16 @@ export function createCommunityClient({ authClient }: CommunityClientOptions = {
       }));
     },
 
-    async listFavorites({ page = 1, pageSize = DEFAULT_PAGE_SIZE }: PageOptions = {}): Promise<CommunityList<VideoItem>> {
-      return listFrom<VideoItem>(await session.requestWithSession(pagePath('/users/me/favorites', page, pageSize)));
+    async listFavorites({ page = 1, pageSize = DEFAULT_PAGE_SIZE, signal }: PageOptions = {}): Promise<CommunityList<VideoItem>> {
+      return listFrom<VideoItem>(await session.requestWithSession(pagePath('/users/me/favorites', page, pageSize), { signal }));
     },
 
-    async listHistory({ page = 1, pageSize = DEFAULT_PAGE_SIZE }: PageOptions = {}): Promise<CommunityList<VideoItem>> {
-      return listFrom<VideoItem>(await session.requestWithSession(pagePath('/users/me/history', page, pageSize)));
+    async listHistory({ page = 1, pageSize = DEFAULT_PAGE_SIZE, signal }: PageOptions = {}): Promise<CommunityList<VideoItem>> {
+      return listFrom<VideoItem>(await session.requestWithSession(pagePath('/users/me/history', page, pageSize), { signal }));
     },
 
-    async listFollows({ page = 1, pageSize = DEFAULT_PAGE_SIZE }: PageOptions = {}): Promise<CommunityList<FollowedUser>> {
-      return listFrom<FollowedUser>(await session.requestWithSession(pagePath('/users/me/follows', page, pageSize)));
+    async listFollows({ page = 1, pageSize = DEFAULT_PAGE_SIZE, signal }: PageOptions = {}): Promise<CommunityList<FollowedUser>> {
+      return listFrom<FollowedUser>(await session.requestWithSession(pagePath('/users/me/follows', page, pageSize), { signal }));
     },
 
     async setFollow(id: unknown, active: boolean): Promise<FollowState> {

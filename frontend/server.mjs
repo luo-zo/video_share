@@ -8,8 +8,10 @@ const directory = path.dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_API_TARGET = 'http://127.0.0.1:8081';
 export const DEFAULT_STORAGE_ORIGIN = 'http://127.0.0.1:9000';
 const staticFiles = new Map([
-  ['/', ['index.html', 'text/html; charset=utf-8']],
-  ['/index.html', ['index.html', 'text/html; charset=utf-8']],
+  // The standalone migration server deliberately serves the retained legacy shell. Vite owns
+  // index.html during the Vue migration, so serving it here would point at an unallowlisted .ts file.
+  ['/', ['legacy.html', 'text/html; charset=utf-8']],
+  ['/index.html', ['legacy.html', 'text/html; charset=utf-8']],
   ['/src/styles.css', ['src/styles.css', 'text/css; charset=utf-8']],
   ['/src/main.js', ['src/main.js', 'text/javascript; charset=utf-8']],
   ['/src/auth.js', ['src/auth.js', 'text/javascript; charset=utf-8']],

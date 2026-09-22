@@ -98,6 +98,7 @@ export interface RequestOptions {
   body?: unknown;
   token?: string;
   keepalive?: boolean;
+  signal?: AbortSignal;
 }
 
 export type Requester = (path: string, options?: RequestOptions) => Promise<unknown>;
@@ -113,10 +114,17 @@ export function createRequester({
 }: RequesterOptions = {}): Requester {
   return async function request(
     path: string,
-    { method = 'GET', body, token, keepalive = false }: RequestOptions = {},
+    { method = 'GET', body, token, keepalive = false, signal }: RequestOptions = {},
   ): Promise<unknown> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let timedOut = false;
+    const abortFromCaller = (): void => controller.abort();
+    if (signal?.aborted) controller.abort();
+    else signal?.addEventListener('abort', abortFromCaller, { once: true });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (token) headers.Authorization = `Bearer ${token}`;
@@ -145,11 +153,15 @@ export function createRequester({
     } catch (error) {
       if (error instanceof AuthError) throw error;
       if (controller.signal.aborted) {
+        if (!timedOut) {
+          throw new AuthError('请求已取消。', { code: 'REQUEST_CANCELLED' });
+        }
         throw new AuthError('请求超时，请检查连接后重试。', { code: 'REQUEST_TIMEOUT' });
       }
       throw new AuthError('无法连接账号服务，请检查网络或稍后重试。', { code: 'NETWORK_ERROR' });
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', abortFromCaller);
     }
   };
 }
