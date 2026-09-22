@@ -54,13 +54,33 @@ export function isBlockedDevPath(rawPath: string): boolean {
   if (segments.some((part, index) => (
     part.startsWith('.') && !(part === '.vite' && segments[index - 1] === 'node_modules')
   ))) return true;
-  if (decoded === '/@fs' || decoded.startsWith('/@fs/')) return true;
-  return BLOCKED_DEV_FILES.has(decoded)
-    || BLOCKED_LEGACY_SOURCES.has(decoded)
-    || decoded.startsWith('/dist/')
-    || decoded.startsWith('/tests/')
-    || decoded.startsWith('/test-results/')
-    || decoded.startsWith('/playwright-report/');
+  // 先归一再比对：重复斜杠、末尾斜杠等写法必须收敛到同一条路径，否则
+  // /src//auth.js、//server.mjs 这类拼写只靠字符串精确匹配就能绕过黑名单。
+  const canonical = `/${segments.join('/')}`;
+  if (canonical === '/@fs' || canonical.startsWith('/@fs/')) return true;
+  return BLOCKED_DEV_FILES.has(canonical)
+    || BLOCKED_LEGACY_SOURCES.has(canonical)
+    || canonical.startsWith('/dist/')
+    || canonical.startsWith('/tests/')
+    || canonical.startsWith('/test-results/')
+    || canonical.startsWith('/playwright-report/');
+}
+
+const FILE_EXTENSION = /\.[a-z0-9]+$/i;
+
+/**
+ * 判断一个未命中的请求是否应该回退到应用外壳（index.html）。只有无扩展名的应用
+ * 页面路径可以回退；缺失的静态资源、带扩展名的文件和 Vite 内部请求（/@*）必须
+ * 保持 404，不能返回首页冒充成功。
+ */
+export function shouldFallbackToAppShell(route: string): boolean {
+  if (!route.startsWith('/') || route.startsWith('/@')) return false;
+  const path = route.split('?')[0].split('#')[0];
+  if (path === '/') return true;
+  const segments = path.split('/').filter(Boolean);
+  if (segments.length === 0) return false;
+  const last = segments[segments.length - 1];
+  return last.startsWith('.') || !FILE_EXTENSION.test(last);
 }
 
 export function shouldHandleApiPath(route: string): boolean {
@@ -112,8 +132,13 @@ function devApiBoundary(env: Record<string, string>): Plugin {
           response.end(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'Resource not found.' } }));
           return;
         }
-        // 非 API 路径交给 Vite 自己的静态资源和 SPA 回退中间件。
+        // 非 API 路径交给 Vite 自己的静态资源中间件。只有应用页面路径才改写成
+        // index.html；其余未命中路径保持 404，由 Vite 的 mpa 行为直接返回，不再走
+        // 默认的 SPA 全量回退。
         if (!shouldHandleApiPath(route)) {
+          if (shouldFallbackToAppShell(route)) {
+            request.url = '/index.html';
+          }
           next();
           return;
         }
@@ -135,6 +160,9 @@ export default defineConfig(({ mode }) => {
   const port = Number(env.PORT) || DEV_PORT;
 
   return {
+    // 关闭 Vite 默认的 SPA 全量回退（appType: 'spa' 会把缺失的 .js/.png 也回退成
+    // index.html 并返回 200）。页面回退由 devApiBoundary 按白名单显式完成。
+    appType: 'mpa',
     plugins: [vue(), devApiBoundary(env)],
     server: {
       host: '127.0.0.1',

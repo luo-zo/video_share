@@ -51,16 +51,30 @@ test('a video detail deep link exposes a shareable page URL', async ({ page, con
 
 test('the development server hides project files while serving routes and source assets', async ({ request }) => {
   const frontendRoot = fileURLToPath(new URL('../..', import.meta.url)).replaceAll('\\', '/').replace(/\/$/, '');
+  const origin = 'http://127.0.0.1:5173';
   for (const path of [
     '/server.mjs', '/package.json', '/.nvmrc', '/.gitignore', '/legacy.html', '/src/main.js',
+    // 重复斜杠、末尾斜杠和大小写变体必须归一到同一条路径，不能绕过黑名单。
+    `${origin}//server.mjs`, `${origin}//package.json`, '/server.mjs/', '/package.json/',
+    '/src//auth.js', '/src///main.js', '/src/main.js/', '/LEGACY.HTML',
     `/@fs/${frontendRoot}/server.mjs`,
     `/@fs/${frontendRoot}/package.json`,
+    `${origin}//@fs/${frontendRoot}/server.mjs`,
     `/%40fs/${frontendRoot.replace(':', '%3A')}/server.mjs`,
     `/%2540fs/${frontendRoot.replace(':', '%253A')}/package.json`,
   ]) {
     expect((await request.get(path)).status(), path).toBe(404);
   }
+  // 缺失的静态资源不能回退成 index.html，否则 404 会被伪装成 200。
+  for (const path of [
+    '/missing.js', '/missing.png', '/assets/nope.css', '/src/does-not-exist.js', '/favicon.ico',
+  ]) {
+    const response = await request.get(path);
+    expect(response.status(), path).toBe(404);
+    expect(response.headers()['content-type'] ?? '', path).not.toContain('text/html');
+  }
   expect((await request.get('/login')).status()).toBe(200);
+  expect((await request.get('/video/42')).status()).toBe(200);
   expect((await request.get('/src/main.ts')).status()).toBe(200);
   expect((await request.get('/src/styles.css')).status()).toBe(200);
   expect((await request.get('/@vite/client')).status()).toBe(200);
