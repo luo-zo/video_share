@@ -6,10 +6,39 @@ import {
   DEFAULT_API_TARGET,
   DEFAULT_STORAGE_ORIGIN,
   createApiMiddleware,
-  methodsForAPIPath,
 } from './server.mjs';
 
 const DEV_PORT = 5173;
+const BLOCKED_DEV_FILES = new Set([
+  '/.nvmrc',
+  '/package.json',
+  '/package-lock.json',
+  '/playwright.config.ts',
+  '/readme.md',
+  '/server.d.mts',
+  '/server.mjs',
+  '/tsconfig.json',
+  '/tsconfig.node.json',
+  '/vite.config.ts',
+]);
+
+export function isBlockedDevPath(rawPath: string): boolean {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(rawPath).replaceAll('\\', '/').toLowerCase();
+  } catch {
+    return true;
+  }
+  if (decoded.split('/').some((part) => part === '.' || part === '..')) return true;
+  return BLOCKED_DEV_FILES.has(decoded)
+    || decoded.startsWith('/tests/')
+    || decoded.startsWith('/test-results/')
+    || decoded.startsWith('/playwright-report/');
+}
+
+export function shouldHandleApiPath(route: string): boolean {
+  return route === '/healthz' || route === '/readyz' || route.startsWith('/api/');
+}
 
 // 开发期 CSP 必须给 Vite 的 HMR 留出口：模块脚本是内联注入的，<style> 是运行时插进
 // document 的。生产环境的严格 CSP（script-src 'self'、style-src 'self'）由 Nginx 下发，
@@ -48,12 +77,26 @@ function devApiBoundary(env: Record<string, string>): Plugin {
       });
       server.middlewares.use((request, response, next) => {
         const route = (request.url || '').split('?')[0];
+        if (isBlockedDevPath(route)) {
+          response.writeHead(404, {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'no-store',
+          });
+          response.end(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'Resource not found.' } }));
+          return;
+        }
         // 非 API 路径交给 Vite 自己的静态资源和 SPA 回退中间件。
-        if (!methodsForAPIPath(route)) {
+        if (!shouldHandleApiPath(route)) {
           next();
           return;
         }
-        void api(request, response, next);
+        void api(request, response, () => {
+          response.writeHead(404, {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'no-store',
+          });
+          response.end(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'Resource not found.' } }));
+        });
       });
     },
   };

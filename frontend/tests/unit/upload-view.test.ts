@@ -33,13 +33,15 @@ describe('UploadView', () => {
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/upload', component: UploadView }] });
     await router.push('/upload');
     await router.isReady();
-    const wrapper = mount(UploadView, { global: { plugins: [router] } });
+    const wrapper = mount(UploadView, { attachTo: document.body, global: { plugins: [router] } });
     await wrapper.get('input[name="title"]').setValue('猫的下午');
     await chooseFile(wrapper);
     await wrapper.get('form').trigger('submit');
 
     await vi.waitFor(() => expect(wrapper.get('[role="alert"]').text()).toContain('视频直传失败'));
     expect(wrapper.text()).toContain('请重新选择视频。');
+    expect(document.activeElement).toBe(wrapper.get('input[type="file"]').element);
+    wrapper.unmount();
   });
 
   it('aborts processing polling on unmount', async () => {
@@ -60,5 +62,18 @@ describe('UploadView', () => {
 
     wrapper.unmount();
     expect(pollingSignal?.aborted).toBe(true);
+  });
+
+  it('focuses the route heading on entry and the file field when only the file is invalid', async () => {
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/upload', component: UploadView }] });
+    await router.push('/upload');
+    await router.isReady();
+    const wrapper = mount(UploadView, { attachTo: document.body, global: { plugins: [router] } });
+    await vi.waitFor(() => expect(document.activeElement).toBe(wrapper.get('#upload-title').element));
+
+    await wrapper.get('input[name="title"]').setValue('有标题但没有文件');
+    await wrapper.get('form').trigger('submit');
+    expect(document.activeElement).toBe(wrapper.get('input[type="file"]').element);
+    wrapper.unmount();
   });
 });

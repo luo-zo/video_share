@@ -47,3 +47,12 @@ test('a video detail deep link exposes a shareable page URL', async ({ page, con
   await expect(page.getByText('页面链接已复制。')).toBeVisible();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('http://127.0.0.1:5173/video/42');
 });
+
+test('the development server hides project files while serving routes and source assets', async ({ request }) => {
+  for (const path of ['/server.mjs', '/package.json', '/.nvmrc']) {
+    expect((await request.get(path)).status(), path).toBe(404);
+  }
+  expect((await request.get('/login')).status()).toBe(200);
+  expect((await request.get('/src/main.ts')).status()).toBe(200);
+  expect((await request.get('/api/v1/not-allowlisted')).status()).toBe(404);
+});

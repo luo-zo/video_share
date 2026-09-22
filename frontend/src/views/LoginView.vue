@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, reactive, ref } from 'vue';
+import { nextTick, onMounted, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import { AuthError, validateLogin, validateRegistration } from '../api/auth';
@@ -18,6 +18,7 @@ const message = ref('');
 const usernameInput = ref<HTMLInputElement | null>(null);
 const passwordInput = ref<HTMLInputElement | null>(null);
 const nicknameInput = ref<HTMLInputElement | null>(null);
+const heading = ref<HTMLElement | null>(null);
 
 function replaceErrors(next: Readonly<Record<string, string>>): void {
   for (const key of Object.keys(errors)) delete errors[key];
@@ -27,8 +28,8 @@ function replaceErrors(next: Readonly<Record<string, string>>): void {
 async function focusFirstError(): Promise<void> {
   await nextTick();
   if (errors.username) usernameInput.value?.focus();
-  else if (errors.password) passwordInput.value?.focus();
   else if (errors.nickname) nicknameInput.value?.focus();
+  else if (errors.password) passwordInput.value?.focus();
 }
 
 async function submit(): Promise<void> {
@@ -67,6 +68,8 @@ function switchMode(): void {
   message.value = '';
   form.password = '';
 }
+
+onMounted(() => void nextTick(() => heading.value?.focus()));
 </script>
 
 <template>
@@ -74,7 +77,7 @@ function switchMode(): void {
     <div class="form-emblem" aria-hidden="true"><span>🐾</span>🐈‍⬛</div>
     <div class="form-heading">
       <p class="welcome-kicker"><span></span>{{ mode === 'login' ? 'WELCOME BACK' : 'JOIN THE ORBIT' }}</p>
-      <h2>{{ mode === 'login' ? '欢迎回来' : '创建账号' }} <span class="heading-spark" aria-hidden="true">✦</span></h2>
+      <h2 id="login-title" ref="heading" tabindex="-1">{{ mode === 'login' ? '欢迎回来' : '创建账号' }} <span class="heading-spark" aria-hidden="true">✦</span></h2>
       <p>{{ mode === 'login' ? '登录后收藏、评论并分享你的片段。' : '只需几步，就能开始分享你眼中的精彩。' }}</p>
     </div>
     <form novalidate @submit.prevent="submit">

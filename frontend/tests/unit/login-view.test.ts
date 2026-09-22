@@ -50,4 +50,17 @@ describe('LoginView', () => {
     expect(wrapper.text()).toContain('请输入密码。');
     expect(signIn).not.toHaveBeenCalled();
   });
+
+  it('focuses the route heading on entry and the actual invalid field after validation', async () => {
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/login', component: LoginView }] });
+    await router.push('/login');
+    await router.isReady();
+    const wrapper = mount(LoginView, { attachTo: document.body, global: { plugins: [router] } });
+    await vi.waitFor(() => expect(document.activeElement).toBe(wrapper.get('#login-title').element));
+
+    await wrapper.get('input[name="username"]').setValue('milo');
+    await wrapper.get('form').trigger('submit');
+    expect(document.activeElement).toBe(wrapper.get('input[name="password"]').element);
+    wrapper.unmount();
+  });
 });

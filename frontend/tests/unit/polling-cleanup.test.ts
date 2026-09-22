@@ -26,4 +26,32 @@ describe('processing polling cleanup', () => {
     await rejection;
     expect(timersAfterAbort).toBe(0);
   });
+
+  it('forwards the abort signal into an in-flight owner detail request', async () => {
+    let requestSignal: AbortSignal | undefined;
+    let rejectRequest: ((reason: Error) => void) | undefined;
+    const authClient = {
+      requestWithSession: vi.fn((_path, options) => new Promise((_resolve, reject) => {
+        requestSignal = options?.signal;
+        rejectRequest = reject;
+        requestSignal?.addEventListener('abort', () => reject(Object.assign(new Error('cancelled'), {
+          code: 'REQUEST_CANCELLED',
+        })));
+      })),
+      requestPublic: vi.fn(),
+      requestWithOptionalSession: vi.fn(),
+    };
+    const client = createVideoClient({ authClient });
+    const controller = new AbortController();
+    const pending = client.waitUntilProcessed(9, { signal: controller.signal });
+    const rejection = expect(pending).rejects.toMatchObject({ code: 'REQUEST_CANCELLED' });
+    await Promise.resolve();
+
+    controller.abort();
+    if (!requestSignal) rejectRequest?.(Object.assign(new Error('missing signal'), { code: 'REQUEST_CANCELLED' }));
+
+    await rejection;
+    expect(requestSignal).toBe(controller.signal);
+    expect(requestSignal?.aborted).toBe(true);
+  });
 });

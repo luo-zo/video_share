@@ -259,7 +259,7 @@ export interface VideoClient {
   listVideos(options?: ListVideosOptions): Promise<VideoList>;
   getVideo(id: unknown, options?: { signal?: AbortSignal }): Promise<VideoItem>;
   listMyVideos(options?: PageOptions): Promise<VideoList>;
-  getMyVideo(id: unknown): Promise<VideoItem>;
+  getMyVideo(id: unknown, options?: { signal?: AbortSignal }): Promise<VideoItem>;
   updateVideo(id: unknown, input: VideoPatchInput): Promise<VideoItem>;
   deleteVideo(id: unknown): Promise<VideoItem>;
   waitUntilProcessed(id: unknown, options?: WaitOptions): Promise<VideoItem>;
@@ -322,8 +322,8 @@ export function createVideoClient({
     return encodeURIComponent(String(id));
   };
 
-  const getMyVideo = async (id: unknown): Promise<VideoItem> => videoFrom(
-    await session.requestWithSession(`/users/me/videos/${checkedID(id)}`),
+  const getMyVideo = async (id: unknown, { signal }: { signal?: AbortSignal } = {}): Promise<VideoItem> => videoFrom(
+    await session.requestWithSession(`/users/me/videos/${checkedID(id)}`, { signal }),
   );
 
   return {
@@ -372,7 +372,7 @@ export function createVideoClient({
         if (signal?.aborted) {
           throw new VideoError('处理状态查询已取消。', { code: 'REQUEST_CANCELLED' });
         }
-        const item = await getMyVideo(id);
+        const item = await getMyVideo(id, { signal });
         onUpdate(item);
         const status = item.status;
         if (typeof status === 'string' && PROCESSING_STATES.includes(status)) return item;

@@ -34,6 +34,9 @@ npm.cmd run dev
 
 `STORAGE_ORIGIN` 会进入页面的 Content Security Policy，必须与后端生成的 MinIO 预签名 URL 来源一致。
 
+迁移期间如需核对旧页面，可运行 `npm.cmd run legacy:serve`。这个命令加载保留的
+`legacy.html` 与白名单内的旧 JavaScript 入口；Vue 开发入口仍由 `npm.cmd run dev` 提供。
+
 ## 验证
 
 ```powershell
