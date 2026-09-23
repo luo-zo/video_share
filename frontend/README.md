@@ -2,7 +2,7 @@
 
 前端现使用 Vue 3、TypeScript、Vite、Vue Router 和 Pinia。Vite 开发服务器复用旧 `server.mjs` 的 API 安全中间件，因此仍保留路径与方法白名单、写请求 Origin 校验、请求体限制、上游超时和安全响应头；`server.mjs` 只作为迁移期兼容入口。视频使用后端返回的预签名 URL 直传 MinIO，并通过 `hls.js` 播放 HLS。
 
-Node 版本要求 **22.22.3**：交付分支 `feature/stage5-upgrade` 已把 `engines` 收紧到该版本并附带 `.nvmrc`，`main` 尚未同步（见 `docs/stage5/baseline.md` 第 11.5 节）。
+Node 版本要求 **22.22.3**：`package.json` 的 `engines.node` 与本目录的 `.nvmrc` 均已锁定该版本，两者一致。
 
 ## 已实现页面
 
@@ -70,6 +70,14 @@ npm.cmd run test:e2e
 `npm test` 同时运行 Vitest/Vue Test Utils 用例和迁移期保留的全部 `node:test` 纯函数/代理用例。
 `npm run test:e2e` 用 Playwright 覆盖可分享深链，以及搜索、分页在浏览器前进后退中的恢复，
 并验证缺失静态资源返回 404；首次运行前需要执行 `npx playwright install chromium`。
+
+5173 若已被别的开发服务器占用，`reuseExistingServer` 会安静地复用它，跑出来的结果就属于那个
+目录而不是本目录。本机请显式换一个空闲端口，Playwright 会自己拉起本目录的 dev server：
+
+```powershell
+$env:E2E_PORT = '5273'
+npm.cmd run test:e2e
+```
 
 `legacy.html` 在开发服务器上会被刻意屏蔽（`isBlockedDevPath`），旧页面只能通过
 `npm run legacy:serve` 打开。

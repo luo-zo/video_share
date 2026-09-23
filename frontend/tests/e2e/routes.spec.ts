@@ -27,7 +27,7 @@ test('deep discovery links keep search and pagination through browser history', 
   await expect(page.getByRole('searchbox', { name: '搜索视频' })).toHaveValue('猫');
 });
 
-test('a video detail deep link exposes a shareable page URL', async ({ page, context }) => {
+test('a video detail deep link exposes a shareable page URL', async ({ page, context, baseURL }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.route('**/api/v1/videos/42/comments?**', (route) => route.fulfill({
     contentType: 'application/json',
@@ -46,12 +46,13 @@ test('a video detail deep link exposes a shareable page URL', async ({ page, con
   await expect(page.getByRole('heading', { name: '月光下的小黑猫' })).toBeVisible();
   await page.getByRole('button', { name: '复制页面链接' }).click();
   await expect(page.getByText('页面链接已复制。')).toBeVisible();
-  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('http://127.0.0.1:5173/video/42');
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(`${baseURL}/video/42`);
 });
 
-test('the development server hides project files while serving routes and source assets', async ({ request }) => {
+test('the development server hides project files while serving routes and source assets', async ({ request, baseURL }) => {
   const frontendRoot = fileURLToPath(new URL('../..', import.meta.url)).replaceAll('\\', '/').replace(/\/$/, '');
-  const origin = 'http://127.0.0.1:5173';
+  if (!baseURL) throw new Error('playwright.config.ts 未设置 baseURL，本用例需要它来构造同源绕过路径');
+  const origin = baseURL;
   for (const path of [
     '/server.mjs', '/package.json', '/.nvmrc', '/.gitignore', '/legacy.html', '/src/main.js',
     // 重复斜杠、末尾斜杠和大小写变体必须归一到同一条路径，不能绕过黑名单。

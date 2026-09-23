@@ -48,7 +48,9 @@ function Invoke-Api {
     $params = @{ Method = $Method; Uri = (Resolve-ApiUrl $Path); UseBasicParsing = $true }
     if ($Headers) { $params.Headers = $Headers }
     if ($null -ne $Body) {
-        $params.ContentType = "application/json"
+        # 必须显式声明 charset：PS 5.1 默认按本地代码页编码字符串请求体，
+        # 中文标题会被发成 '?'。5.1 与 7 都按 UTF-8 正确编码。
+        $params.ContentType = "application/json; charset=utf-8"
         $params.Body = ($Body | ConvertTo-Json -Depth 6)
     }
     if ($skipHttpErrorCheck) { $params.SkipHttpErrorCheck = $true }
@@ -68,9 +70,16 @@ function Invoke-Api {
         $webResponse = $_.Exception.Response
         if ($null -eq $webResponse) { throw }
         $status = [int]$webResponse.StatusCode
-        $reader = New-Object System.IO.StreamReader($webResponse.GetResponseStream())
-        $content = $reader.ReadToEnd()
-        $reader.Dispose()
+        # PS 5.1 在抛出异常前已经把响应流读空了，再次 ReadToEnd 只能得到空串，
+        # 错误正文实际存放在 ErrorDetails.Message。PS 6+ 走 SkipHttpErrorCheck
+        # 分支，不会进入这里，因此这段只影响 5.1。
+        if ($null -ne $_.ErrorDetails -and -not [string]::IsNullOrWhiteSpace($_.ErrorDetails.Message)) {
+            $content = $_.ErrorDetails.Message
+        } else {
+            $reader = New-Object System.IO.StreamReader($webResponse.GetResponseStream())
+            $content = $reader.ReadToEnd()
+            $reader.Dispose()
+        }
     }
     if ($ExpectStatus -notcontains $status) {
         throw ("{0} {1} returned {2}, expected {3}. Body: {4}" -f $Method, $Path, $status, ($ExpectStatus -join "/"), $content)
@@ -144,7 +153,10 @@ function New-TestVideo([hashtable]$Author) {
 function Find-Video([uint64]$Target, [string]$Query, [hashtable]$Headers = $null) {
     $path = "/api/v1/videos?q={0}&page_size=50" -f [Uri]::EscapeDataString($Query)
     $result = Invoke-Api -Method Get -Path $path -Headers $Headers
-    return @($result.data.data.items | Where-Object { [uint64]$_.id -eq $Target })
+    # 前置逗号必须保留：返回值会在管道里展开，只命中一条时 @() 退化成标量，
+    # 而 PS 5.1 的标量没有 .Count（取值为 $null），调用点断言会误判成不匹配。
+    # 包一层后调用点拿到的始终是数组，.Count 在 5.1 与 7 下都可靠。
+    return ,@($result.data.data.items | Where-Object { [uint64]$_.id -eq $Target })
 }
 
 try {

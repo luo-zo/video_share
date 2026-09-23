@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
@@ -77,28 +76,5 @@ func run(log *slog.Logger) error {
 		log,
 	)
 	log.Info("transcode worker started", "worker_id", cfg.WorkerID, "topic", cfg.KafkaTranscodeTopic)
-	for {
-		records, err := consumer.Poll(ctx)
-		if err != nil {
-			return err
-		}
-		for _, record := range records {
-			var event messaging.TranscodeRequested
-			if err := json.Unmarshal(record.Value, &event); err != nil {
-				log.Error("discard invalid transcode event", "partition", record.Partition, "offset", record.Offset, "error", err)
-				if err := consumer.Commit(ctx, record); err != nil {
-					return err
-				}
-				continue
-			}
-			started := time.Now()
-			if err := service.Process(ctx, event); err != nil {
-				return err
-			}
-			if err := consumer.Commit(ctx, record); err != nil {
-				return err
-			}
-			log.Info("transcode event handled", "event_id", event.EventID, "job_id", event.JobID, "video_id", event.VideoID, "latency_ms", time.Since(started).Milliseconds())
-		}
-	}
+	return consume(ctx, log, consumer, service)
 }

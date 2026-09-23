@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$BaseUrl = "http://127.0.0.1:8081",
     [int]$TimeoutSeconds = 180
 )
@@ -66,7 +66,10 @@ try {
     $created = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/videos" -Headers $headers -ContentType "application/json" -Body $createBody
     $videoID = [uint64]$created.data.id
     if (-not $created.data.upload_url) { throw "create response did not include upload_url" }
-    Invoke-WebRequest -Method Put -Uri $created.data.upload_url -InFile $tempVideo -ContentType "video/mp4" | Out-Null
+    # PS 5.1 的 Invoke-WebRequest 默认走 IE(mshtml) 解析响应；本机 IE 未初始化时该路径会抛
+    # NullReferenceException（PUT 到 MinIO 即如此）。-UseBasicParsing 跳过 DOM 解析。
+    # e2e-community.ps1 的同一处上传早已这么写，这里补齐同一约定。
+    Invoke-WebRequest -Method Put -Uri $created.data.upload_url -InFile $tempVideo -ContentType "video/mp4" -UseBasicParsing | Out-Null
 
     Write-Host "[5/8] Completing upload and entering asynchronous processing..."
     $completed = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/videos/$videoID/complete" -Headers $headers
@@ -89,17 +92,19 @@ try {
     Write-Host "[7/8] Verifying HLS master, variant, segment and cover..."
     $detail = Invoke-RestMethod -Uri "$BaseUrl/api/v1/videos/$videoID"
     if ($detail.data.play_type -ne "hls") { throw "expected HLS playback, got $($detail.data.play_type)" }
-    $master = (Invoke-WebRequest -Uri (Resolve-ApiUrl $detail.data.play_url)).Content
+    # 播放列表与封面同样不能走 PS 5.1 的 IE(mshtml) 响应解析（本机 IE 未初始化会抛
+    # NullReferenceException）。Invoke-RestMethod 自带 basic parsing 并直接返回文本。
+    $master = Invoke-RestMethod -Uri (Resolve-ApiUrl $detail.data.play_url)
     if ($master -notmatch "#EXTM3U") { throw "invalid HLS master playlist" }
     $variantPath = First-MediaLine $master
     if (-not $variantPath) { throw "HLS master does not contain a variant" }
-    $variant = (Invoke-WebRequest -Uri (Resolve-ApiUrl $variantPath)).Content
+    $variant = Invoke-RestMethod -Uri (Resolve-ApiUrl $variantPath)
     if ($variant -notmatch "#EXTM3U") { throw "invalid HLS variant playlist" }
     $segmentPath = First-MediaLine $variant
     if (-not $segmentPath) { throw "HLS variant does not contain a segment" }
-    $segment = Invoke-WebRequest -Uri (Resolve-ApiUrl $segmentPath)
+    $segment = Invoke-WebRequest -Uri (Resolve-ApiUrl $segmentPath) -UseBasicParsing
     if ($segment.StatusCode -ne 200 -or $segment.RawContentLength -le 0) { throw "HLS segment is unavailable" }
-    $cover = Invoke-WebRequest -Uri (Resolve-ApiUrl $detail.data.cover_url)
+    $cover = Invoke-WebRequest -Uri (Resolve-ApiUrl $detail.data.cover_url) -UseBasicParsing
     if ($cover.StatusCode -ne 200 -or $cover.RawContentLength -le 0) { throw "cover is unavailable" }
 
     Write-Host "[8/8] Stage 3 E2E passed."

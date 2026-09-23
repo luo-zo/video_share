@@ -40,8 +40,11 @@ export interface AttachOptions {
   onError?: (info: HlsErrorInfo) => void;
 }
 
+// 走 hls.js 的 light 构建：完整构建会打进字幕、备用音轨、EME 与 CMCD 支持，
+// 而本播放器只用基础 MSE 拉流，用不到的部分让该 chunk 长期超过 Vite 的 500 kB 警戒线。
+// 代价是无法再播放这些特性，如果将来要支持字幕需要切回 'hls.js'。
 // hls.js 的实际模块形状比这里最小用到的接口宽，只在这一处收口转换。
-const loadBundledHls = async (): Promise<HlsModule> => (await import('hls.js')) as unknown as HlsModule;
+const loadBundledHls = async (): Promise<HlsModule> => (await import('hls.js/light')) as unknown as HlsModule;
 
 function readString(value: unknown): string {
   return typeof value === 'string' ? value : '';
