@@ -1,6 +1,6 @@
 # Stage 5 收尾复核
 
-复核日期：2026-09-24。复核范围是本地 `main` 工作区，基线 HEAD 为 `3cee3f4964fe224bb37cbd77b90be74c824e12b7`。本轮补充 Outbox 有界发布/重试、Nginx 动态 Docker DNS 与验收断言，并同步文档；未创建提交，也未推送远端。
+复核日期：2026-09-24。复核范围是本地 `main` 工作区，功能代码基线 HEAD 为 `3cee3f4964fe224bb37cbd77b90be74c824e12b7`。最终交付提交为 `91dcdf99c9d11f2ccb3c6686ef5bdd6ef4ab5642`，已快进推送到公开仓库 `origin/main`；远端引用已核对一致。
 
 ## F01–F12 验收证据
 
@@ -50,14 +50,15 @@
 | `backend/scripts/e2e-stage5.ps1 -DrillKafkaOutage -SkipBrowser` | 通过；Kafka 停机时记录 pending、`last_error` 和第二次 claim；恢复后发布成功、错误清除、视频 ready。 |
 | Nginx 部署专项 | production/isolated `nginx -t` 通过；预留旧 API IP 后容器地址从 `.7` 改为 `.10`，前端保持运行，5 秒 DNS 缓存后同源 API 返回 200；33,000 字节请求为 413；MinIO CORS 与 CSP 均通过。 |
 | `docker compose ... config -q` | 通过 |
+| GitHub Actions（推送提交 `91dcdf9`） | 前端、浏览器 E2E、后端单测、后端真实依赖集成四个 job 的详情页均显示 succeeded；汇总页仍显示 In progress，故暂不记录为已最终归档的 workflow 全绿。运行记录：[video-share CI](https://github.com/luo-zo/video_share/actions/runs/35993930550)。 |
 
 真实依赖集成测试的临时 MySQL 容器在结束时自动移除；测试密码、Redis 密码及 MinIO 凭证未输出。业务库没有被用于集成测试。
 
 ## 已知边界与交接状态
 
-1. 本地阶段功能和验收已完成，但**尚未提交、合并或推送**：`main` 比 `origin/main` 领先 28 个提交，工作树仍含 T01–T12 的既有未提交变更。原要求禁止自行推送，故本轮只更新工作区；是否整理提交/合并由用户决定。
-2. 部署验收是 Windows 本机隔离 Compose，不包含公网发布、真实 HTTPS 域名、CDN、长期稳态或生产数据演练；这些不是已验证结论。
+1. Stage 5 工作已在 `main` 提交并推送，未创建 PR（本地 `main` 已是整合分支，远端更新为快进）。工作树仅保留一个未提交的本地噪声文件 `docs/stage5/perf-results/20260924-113059-categories-cold-r1-cold.stats.txt`：约 9.4 MiB 的重复 Docker stats 终端控制序列；该文件未删除、未纳入公开提交，其他可读性能原始结果已提交。
+2. 部署验收是 Windows 本机隔离 Compose，不包含公网发布、真实 HTTPS 域名、CDN、长期稳态或生产数据演练；仓库没有生产部署 workflow，Compose 端口绑定本机回环地址，因此当前代码推送不等于应用已上线。
 3. 性能报告只代表本机小型隔离数据集；Redis 分类回源有约 2 秒 P95 延迟，HLS 只测一个本地合成分片。容量结论和局限见 `performance.md`。
 4. E2E 创建的合成身份、举报和审计记录按脚本设计保留在隔离数据库卷中；合成视频只软删除。没有清空或删除任何业务库、原始压测结果或普通开发 Compose 卷。
 
-本地下一步若要形成仓库交付，是在检查最终 diff 后由用户确认是否创建本地提交；远端合并/推送仍需单独授权。
+公网部署仍待确认平台/服务器、域名与 TLS、生产依赖地址及通过安全渠道配置的密钥，并制定数据库备份/迁移窗口。不得将生产密码贴入聊天或提交到 Git。

@@ -891,4 +891,4 @@ frontend/tests/e2e/routes.spec.ts
 - production 与 isolated Nginx 配置都通过 `nginx -t`；`/api/` 使用 Docker DNS resolver `127.0.0.11`、5 秒缓存。占用原 API 地址后重建 API，容器 IP 从 `172.20.0.7` 变为 `172.20.0.10`；保持 Nginx 前端进程不变，等待 resolver 缓存后同源分类接口仍返回 200。
 - 33,000 字节 API 请求返回 413；MinIO 对 `http://127.0.0.1:15173` 的预检返回相应 `Access-Control-Allow-Origin`；CSP 头存在。最终 Stage5 E2E 对 refresh `Set-Cookie` 断言 `HttpOnly`、`SameSite=Lax`，12 个 API 阶段和真实 Playwright 1/1 均通过。
 - 两个 API 进程共同使用隔离 Redis 的登录限流测试：前 10 个交替请求到达 CSRF guard（403），第 11 个跨进程返回 429 并带 `Retry-After`。
-- 仍未发布到公网或 GitHub Actions；HTTPS 域名/CDN、生产数据、长时间稳态和生产容量不在本地实测范围。实现仍处于 dirty `main` 工作区，未提交、合并或推送。
+- Stage 5 已提交为 `91dcdf99c9d11f2ccb3c6686ef5bdd6ef4ab5642` 并快进推送至 `origin/main`。GitHub Actions 四个 job 详情页显示成功，汇总页当时仍为 In progress，见 [运行记录](https://github.com/luo-zo/video_share/actions/runs/35993930550)。本地隔离 Compose 已验收，但未发布到公网；HTTPS 域名/CDN、生产数据、长时间稳态和生产容量不在本地实测范围。
