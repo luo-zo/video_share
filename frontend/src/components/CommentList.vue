@@ -21,7 +21,8 @@ function dateLabel(value: string | undefined): string {
   <ul v-if="comments.length" class="comment-list">
     <li v-for="comment in comments" :key="comment.id" class="comment-item">
       <div class="comment-meta">
-        <strong class="comment-author">{{ comment.author?.nickname || comment.author?.username || '匿名用户' }}</strong>
+        <RouterLink v-if="comment.author?.id" class="comment-author" :to="`/creator/${comment.author.id}`">{{ comment.author?.nickname || comment.author?.username || '匿名用户' }}</RouterLink>
+        <strong v-else class="comment-author">{{ comment.author?.nickname || comment.author?.username || '匿名用户' }}</strong>
         <time class="comment-time">{{ dateLabel(comment.created_at) }}</time>
       </div>
       <p class="comment-body">{{ comment.content }}</p>

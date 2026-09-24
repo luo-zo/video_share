@@ -3,7 +3,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { communityClient, videoClient } from '../../src/api';
+import { communityClient, taxonomyClient, videoClient } from '../../src/api';
 import type { VideoItem } from '../../src/api/video';
 import { useAuthStore } from '../../src/stores/auth';
 import VideoDetailView from '../../src/views/VideoDetailView.vue';
@@ -16,6 +16,7 @@ vi.mock('../../src/api', () => ({
     listComments: vi.fn(), setLike: vi.fn(), setFavorite: vi.fn(), setFollow: vi.fn(),
     addComment: vi.fn(), deleteComment: vi.fn(), reportWatch: vi.fn(),
   },
+  taxonomyClient: { listCategories: vi.fn() },
 }));
 
 const item = (id: number, overrides: Partial<VideoItem> = {}): VideoItem => ({
@@ -37,6 +38,7 @@ async function mountAt(path: string) {
     history: createMemoryHistory(),
     routes: [
       { path: '/video/:id', component: VideoDetailView },
+      { path: '/creator/:id', component: { template: '<div>creator</div>' } },
       { path: '/me', component: { template: '<div>profile</div>' } },
       { path: '/login', name: 'login', component: { template: '<div>login</div>' } },
     ],
@@ -63,6 +65,8 @@ describe('VideoDetailView owner and route lifecycle', () => {
       ...(typeof patch.title === 'string' ? { title: patch.title } : {}),
       ...(typeof patch.description === 'string' ? { description: patch.description } : {}),
       ...(typeof patch.visibility === 'string' ? { visibility: patch.visibility } : {}),
+      ...(typeof patch.categoryId === 'number' ? { category_id: patch.categoryId } : {}),
+      ...(Array.isArray(patch.tags) ? { tags: patch.tags.map((name) => ({ id: 1, name })) } : {}),
     }));
     vi.mocked(videoClient.deleteVideo).mockReset().mockImplementation(async (id) => item(Number(id), { status: 'deleted' }));
     vi.mocked(communityClient.listComments).mockReset().mockResolvedValue({ items: [], page: 1, page_size: 50, total: 0 });
@@ -71,11 +75,16 @@ describe('VideoDetailView owner and route lifecycle', () => {
     vi.mocked(communityClient.setFollow).mockReset();
     vi.mocked(communityClient.addComment).mockReset();
     vi.mocked(communityClient.deleteComment).mockReset();
+    vi.mocked(taxonomyClient.listCategories).mockReset().mockResolvedValue({ items: [
+      { id: 1, slug: 'uncategorized', name: '未分类' },
+      { id: 2, slug: 'life', name: '生活' },
+    ] });
   });
 
   it('loads private submissions through getMyVideo and supports owner editing', async () => {
     vi.mocked(videoClient.getMyVideo).mockResolvedValue(item(9, {
       title: '私密猫片', status: 'failed', visibility: 'private', play_url: undefined,
+      category_id: 2, tags: [{ id: 3, name: '猫咪' }],
     }));
     const { wrapper } = await mountAt('/video/9?owner=1');
 
@@ -83,8 +92,12 @@ describe('VideoDetailView owner and route lifecycle', () => {
     expect(videoClient.getVideo).not.toHaveBeenCalled();
     await wrapper.get('.detail-owner > .soft-button').trigger('click');
     await wrapper.get('#owner-title').setValue('修复后的标题');
+    await wrapper.get('#owner-category').setValue('2');
+    await wrapper.get('#owner-tags').setValue('猫咪, Go');
     await wrapper.get('form.owner-edit').trigger('submit');
-    await vi.waitFor(() => expect(videoClient.updateVideo).toHaveBeenCalledWith('9', expect.objectContaining({ title: '修复后的标题' })));
+    await vi.waitFor(() => expect(videoClient.updateVideo).toHaveBeenCalledWith('9', expect.objectContaining({
+      title: '修复后的标题', categoryId: '2', tags: ['猫咪', 'Go'],
+    })));
   });
 
   it('keeps ordinary detail navigation on the public endpoint', async () => {

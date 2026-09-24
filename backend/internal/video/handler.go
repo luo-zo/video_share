@@ -11,6 +11,7 @@ import (
 
 	"video_share/internal/middleware"
 	"video_share/internal/response"
+	"video_share/internal/taxonomy"
 )
 
 type Handler struct {
@@ -63,14 +64,55 @@ func (h *Handler) List(c *gin.Context) {
 	if !ok {
 		return
 	}
+	categoryID, ok := queryUint64(c, "category_id")
+	if !ok {
+		return
+	}
 	result, err := h.svc.ListPublic(c.Request.Context(), ListQuery{
-		Page:     page,
-		PageSize: pageSize,
-		Query:    c.Query("q"),
-		Sort:     Sort(c.Query("sort")),
+		Page:       page,
+		PageSize:   pageSize,
+		Query:      c.Query("q"),
+		Sort:       Sort(c.Query("sort")),
+		CategoryID: categoryID,
+		Tags:       c.QueryArray("tag"),
 	})
 	if err != nil {
 		h.handleError(c, "list videos", err)
+		return
+	}
+	response.OK(c, http.StatusOK, result)
+}
+
+func (h *Handler) Following(c *gin.Context) {
+	userID := c.GetUint64(middleware.UserIDKey)
+	if userID == 0 {
+		response.Error(c, http.StatusUnauthorized, response.CodeUnauthorized, "请先登录")
+		return
+	}
+	page, pageSize, ok := pagination(c)
+	if !ok {
+		return
+	}
+	categoryID, ok := queryUint64(c, "category_id")
+	if !ok {
+		return
+	}
+	result, err := h.svc.Following(c.Request.Context(), userID, ListQuery{Page: page, PageSize: pageSize, Query: c.Query("q"), Sort: Sort(c.Query("sort")), CategoryID: categoryID, Tags: c.QueryArray("tag")})
+	if err != nil {
+		h.handleError(c, "list following videos", err)
+		return
+	}
+	response.OK(c, http.StatusOK, result)
+}
+
+func (h *Handler) Related(c *gin.Context) {
+	id, ok := videoID(c)
+	if !ok {
+		return
+	}
+	result, err := h.svc.Related(c.Request.Context(), id)
+	if err != nil {
+		h.handleError(c, "list related videos", err)
 		return
 	}
 	response.OK(c, http.StatusOK, result)
@@ -252,6 +294,19 @@ func positiveQuery(c *gin.Context, name string, fallback int) (int, bool) {
 	return value, true
 }
 
+func queryUint64(c *gin.Context, name string) (uint64, bool) {
+	raw := c.Query(name)
+	if raw == "" {
+		return 0, true
+	}
+	value, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || value == 0 {
+		response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, name+" must be a positive integer")
+		return 0, false
+	}
+	return value, true
+}
+
 func (h *Handler) handleError(c *gin.Context, operation string, err error) {
 	switch {
 	case errors.Is(err, ErrUnauthorized):
@@ -284,6 +339,9 @@ func (h *Handler) handleError(c *gin.Context, operation string, err error) {
 		response.Error(c, http.StatusConflict, response.CodeVideoStateConflict, "当前视频状态不能执行此操作")
 	case errors.Is(err, ErrInvalidMediaPath):
 		response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "无效的媒体路径")
+	case errors.Is(err, taxonomy.ErrCategoryNotFound), errors.Is(err, taxonomy.ErrTagInvalid), errors.Is(err, taxonomy.ErrTooManyTags):
+		status, message := taxonomy.ErrorStatus(err)
+		response.Error(c, status, response.CodeInvalidParameter, message)
 	default:
 		h.log.Error(operation+" failed", "error", err)
 		response.Error(c, http.StatusInternalServerError, response.CodeInternal, "internal server error")

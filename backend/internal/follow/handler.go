@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"video_share/internal/middleware"
+	"video_share/internal/notification"
 	"video_share/internal/response"
 )
 
@@ -22,12 +23,12 @@ func NewHandler(svc *Service, log *slog.Logger) *Handler {
 	return &Handler{svc: svc, log: log}
 }
 
-func (h *Handler) Follow(c *gin.Context)   { h.apply(c, "follow user", h.svc.Follow) }
-func (h *Handler) Unfollow(c *gin.Context) { h.apply(c, "unfollow user", h.svc.Unfollow) }
+func (h *Handler) Follow(c *gin.Context)   { h.apply(c, "follow user", h.svc.FollowWithRequest) }
+func (h *Handler) Unfollow(c *gin.Context) { h.apply(c, "unfollow user", h.svc.UnfollowWithRequest) }
 
 // apply 是关注 / 取关端点的共同骨架：先要求已登录，再解析目标用户 ID，然后写入并
 // 返回最终状态。首次调用和重复调用都会返回相同的 200 结果。
-func (h *Handler) apply(c *gin.Context, operation string, write func(context.Context, uint64, uint64) (*FollowState, error)) {
+func (h *Handler) apply(c *gin.Context, operation string, write func(context.Context, uint64, uint64, string) (*FollowState, error)) {
 	userID := c.GetUint64(middleware.UserIDKey)
 	if userID == 0 {
 		response.Error(c, http.StatusUnauthorized, response.CodeUnauthorized, "请先登录")
@@ -38,7 +39,11 @@ func (h *Handler) apply(c *gin.Context, operation string, write func(context.Con
 		response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "invalid user id")
 		return
 	}
-	state, err := write(c.Request.Context(), userID, id)
+	requestID := c.GetHeader("Idempotency-Key")
+	if requestID == "" {
+		requestID = c.GetHeader("X-Request-ID")
+	}
+	state, err := write(c.Request.Context(), userID, id, requestID)
 	if err != nil {
 		h.handleError(c, operation, err)
 		return
@@ -64,6 +69,32 @@ func (h *Handler) ListFollows(c *gin.Context) {
 	response.OK(c, http.StatusOK, result)
 }
 
+func (h *Handler) ListFollowers(c *gin.Context) {
+	h.listPublic(c, h.svc.ListFollowers)
+}
+
+func (h *Handler) ListFollowing(c *gin.Context) {
+	h.listPublic(c, h.svc.ListFollowing)
+}
+
+func (h *Handler) listPublic(c *gin.Context, list func(context.Context, uint64, int, int) (*FollowListResponse, error)) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || id == 0 {
+		response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "invalid user id")
+		return
+	}
+	page, pageSize, ok := pagination(c)
+	if !ok {
+		return
+	}
+	result, err := list(c.Request.Context(), id, page, pageSize)
+	if err != nil {
+		h.handleError(c, "list public follows", err)
+		return
+	}
+	response.OK(c, http.StatusOK, result)
+}
+
 func (h *Handler) handleError(c *gin.Context, operation string, err error) {
 	switch {
 	case errors.Is(err, ErrUnauthorized):
@@ -74,8 +105,14 @@ func (h *Handler) handleError(c *gin.Context, operation string, err error) {
 		response.Error(c, http.StatusNotFound, response.CodeNotFound, "用户不存在")
 	case errors.Is(err, ErrPaginationInvalid):
 		response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "分页参数无效")
+	case errors.Is(err, notification.ErrReceiptConflict):
+		response.Error(c, http.StatusConflict, response.CodeIdempotencyConflict, "相同 request_id 的请求内容不一致")
+	case errors.Is(err, notification.ErrInvalidRequestID):
+		response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "request_id 无效")
 	default:
-		h.log.Error(operation+" failed", "error", err)
+		if h.log != nil {
+			h.log.Error(operation+" failed", "error", err)
+		}
 		response.Error(c, http.StatusInternalServerError, response.CodeInternal, "internal server error")
 	}
 }

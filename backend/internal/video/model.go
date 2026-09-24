@@ -65,6 +65,17 @@ type Stats struct {
 	CommentCount  uint64 `json:"comment_count"`
 }
 
+type CategoryInfo struct {
+	ID   uint64 `json:"id"`
+	Slug string `json:"slug"`
+	Name string `json:"name"`
+}
+
+type TagInfo struct {
+	ID   uint64 `json:"id"`
+	Name string `json:"name"`
+}
+
 // ViewerState describes relationships belonging to the current viewer. It is
 // omitted from anonymous responses.
 type ViewerState struct {
@@ -78,11 +89,13 @@ type ViewerState struct {
 type Video struct {
 	ID                 uint64     `gorm:"primaryKey;autoIncrement"`
 	UserID             uint64     `gorm:"not null;index"`
+	CategoryID         uint64     `gorm:"not null;index"`
 	Title              string     `gorm:"type:varchar(100);not null"`
 	Description        string     `gorm:"type:text;not null"`
 	ObjectKey          string     `gorm:"type:varchar(512);not null"`
 	Status             Status     `gorm:"type:tinyint;not null;default:1;index"`
 	Visibility         Visibility `gorm:"type:tinyint;not null;default:1;index"`
+	ModerationStatus   string     `gorm:"type:varchar(16);not null;default:visible;index"`
 	FileSize           int64      `gorm:"not null"`
 	ContentType        string     `gorm:"type:varchar(100);not null"`
 	HLSMasterKey       *string    `gorm:"type:varchar(512)"`
@@ -97,9 +110,11 @@ type Video struct {
 	CreatedAt          time.Time  `gorm:"not null"`
 	UpdatedAt          time.Time  `gorm:"not null"`
 
-	Author      Author       `gorm:"-"`
-	Stats       Stats        `gorm:"-"`
-	ViewerState *ViewerState `gorm:"-"`
+	Author      Author        `gorm:"-"`
+	Stats       Stats         `gorm:"-"`
+	ViewerState *ViewerState  `gorm:"-"`
+	Category    *CategoryInfo `gorm:"-"`
+	Tags        []TagInfo     `gorm:"-"`
 }
 
 func (Video) TableName() string { return "videos" }

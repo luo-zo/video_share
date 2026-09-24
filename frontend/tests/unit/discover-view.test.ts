@@ -7,6 +7,7 @@ import { videoClient } from '../../src/api';
 
 vi.mock('../../src/api', () => ({
   videoClient: { listVideos: vi.fn() },
+  taxonomyClient: { listCategories: vi.fn().mockResolvedValue({ items: [] }) },
 }));
 
 describe('DiscoverView', () => {

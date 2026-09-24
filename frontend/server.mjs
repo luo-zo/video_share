@@ -28,14 +28,27 @@ const staticFiles = new Map([
 const fixedApiRoutes = new Map([
   ['/healthz', ['GET']],
   ['/readyz', ['GET']],
-  ['/api/v1/users/me', ['GET']],
+  ['/api/v1/users/me', ['GET', 'PATCH']],
   ['/api/v1/users/me/videos', ['GET']],
   ['/api/v1/users/me/favorites', ['GET']],
   ['/api/v1/users/me/history', ['GET']],
   ['/api/v1/users/me/follows', ['GET']],
+  ['/api/v1/users/me/reports', ['GET']],
+  ['/api/v1/reports', ['POST']],
+  ['/api/v1/admin/reports', ['GET']],
+  ['/api/v1/admin/moderation-actions', ['GET']],
   ['/api/v1/auth/login', ['POST']],
   ['/api/v1/auth/register', ['POST']],
+  ['/api/v1/auth/csrf', ['GET']],
+  ['/api/v1/auth/refresh', ['POST']],
+  ['/api/v1/auth/logout', ['POST']],
+  ['/api/v1/users/me/change-password', ['POST']],
   ['/api/v1/videos', ['GET', 'POST']],
+  ['/api/v1/videos/ranking', ['GET']],
+  ['/api/v1/categories', ['GET']],
+  ['/api/v1/feed/following', ['GET']],
+  ['/api/v1/notifications', ['GET']],
+  ['/api/v1/notifications/read-all', ['POST']],
 ]);
 // 这些方法可以携带请求体；没有请求体的删除调用仍然直接转发。
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
@@ -44,12 +57,20 @@ export function methodsForAPIPath(route) {
   const fixed = fixedApiRoutes.get(route);
   if (fixed) return fixed;
   if (/^\/api\/v1\/videos\/[1-9]\d*$/.test(route)) return ['GET'];
+  if (/^\/api\/v1\/videos\/[1-9]\d*\/related$/.test(route)) return ['GET'];
   if (/^\/api\/v1\/users\/me\/videos\/[1-9]\d*$/.test(route)) return ['GET', 'PATCH', 'DELETE'];
+  if (/^\/api\/v1\/users\/[1-9]\d*$/.test(route)) return ['GET'];
+  if (/^\/api\/v1\/users\/[1-9]\d*\/(?:videos|followers|follows)$/.test(route)) return ['GET'];
   if (/^\/api\/v1\/users\/[1-9]\d*\/follow$/.test(route)) return ['PUT', 'DELETE'];
   if (/^\/api\/v1\/videos\/[1-9]\d*\/(?:like|favorite)$/.test(route)) return ['PUT', 'DELETE'];
   if (/^\/api\/v1\/videos\/[1-9]\d*\/comments$/.test(route)) return ['GET', 'POST'];
   if (/^\/api\/v1\/videos\/[1-9]\d*\/watch$/.test(route)) return ['POST'];
   if (/^\/api\/v1\/comments\/[1-9]\d*$/.test(route)) return ['DELETE'];
+  if (/^\/api\/v1\/comments\/[1-9]\d*\/replies$/.test(route)) return ['GET'];
+  if (/^\/api\/v1\/notifications\/[1-9]\d*\/read$/.test(route)) return ['PATCH'];
+  if (/^\/api\/v1\/admin\/reports\/[1-9]\d*\/assign$/.test(route)) return ['PATCH'];
+  if (/^\/api\/v1\/admin\/reports\/[1-9]\d*$/.test(route)) return ['PATCH'];
+  if (/^\/api\/v1\/admin\/(videos|comments|users)\/[1-9]\d*\/(hide|restore|disable|enable)$/.test(route)) return ['POST'];
   if (/^\/api\/v1\/videos\/[1-9]\d*\/cover$/.test(route)) return ['GET'];
   const hls = route.match(/^\/api\/v1\/videos\/[1-9]\d*\/hls\/(.+)$/);
   if (hls && hls[1].split('/').every((part) => part !== '.' && part !== '..' && /^[A-Za-z0-9._-]+$/.test(part))) return ['GET'];
@@ -160,6 +181,11 @@ function callUpstream(target, request, route, body, timeoutMs) {
     const transport = target.protocol === 'https:' ? https : http;
     const headers = { Accept: 'application/json' };
     if (request.headers.authorization) headers.Authorization = request.headers.authorization;
+    if (request.headers.cookie) headers.Cookie = request.headers.cookie;
+    if (request.headers.origin) headers.Origin = request.headers.origin;
+    if (request.headers['x-csrf-token']) headers['X-CSRF-Token'] = request.headers['x-csrf-token'];
+    if (request.headers['idempotency-key']) headers['Idempotency-Key'] = request.headers['idempotency-key'];
+    if (request.headers['x-request-id']) headers['X-Request-ID'] = request.headers['x-request-id'];
     if (body !== undefined) {
       headers['Content-Type'] = request.headers['content-type'];
       headers['Content-Length'] = body.length;
@@ -185,6 +211,7 @@ function callUpstream(target, request, route, body, timeoutMs) {
       incoming.once('end', () => finish(null, {
         status: incoming.statusCode,
         contentType: incoming.headers['content-type'] || 'application/json; charset=utf-8',
+        setCookie: incoming.headers['set-cookie'],
         location: incoming.headers.location,
         body: Buffer.concat(chunks),
       }));
@@ -273,6 +300,7 @@ export function createApiMiddleware({
         'Content-Length': upstream.body.length,
         'Cache-Control': 'no-store',
       };
+      if (upstream.setCookie) headers['Set-Cookie'] = upstream.setCookie;
       if (upstream.status >= 300 && upstream.status < 400 && upstream.location) {
         try {
           const location = new URL(upstream.location, target);

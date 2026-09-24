@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"video_share/internal/taxonomy"
 )
 
 var (
@@ -28,6 +30,7 @@ var (
 	ErrListQueryInvalid   = errors.New("invalid list query")
 	ErrVisibilityInvalid  = errors.New("invalid video visibility")
 	ErrPatchEmpty         = errors.New("empty video update")
+	ErrRelatedInvalid     = errors.New("invalid related video request")
 )
 
 // maxSearchQueryRunes bounds the discovery keyword after trimming.
@@ -47,16 +50,21 @@ type Service struct {
 	maxFileSize  int64
 	uploadExpiry time.Duration
 	playExpiry   time.Duration
+	taxonomy     taxonomy.Manager
 }
 
-func NewService(repo Repository, store ObjectStore, maxFileSize int64, uploadExpiry, playExpiry time.Duration) *Service {
-	return &Service{
+func NewService(repo Repository, store ObjectStore, maxFileSize int64, uploadExpiry, playExpiry time.Duration, managers ...taxonomy.Manager) *Service {
+	service := &Service{
 		repo:         repo,
 		store:        store,
 		maxFileSize:  maxFileSize,
 		uploadExpiry: uploadExpiry,
 		playExpiry:   playExpiry,
 	}
+	if len(managers) > 0 {
+		service.taxonomy = managers[0]
+	}
+	return service
 }
 
 func (s *Service) Create(ctx context.Context, userID uint64, req CreateRequest) (*CreateResponse, error) {
@@ -83,6 +91,16 @@ func (s *Service) Create(ctx context.Context, userID uint64, req CreateRequest) 
 	if req.FileSize <= 0 || req.FileSize > s.maxFileSize {
 		return nil, ErrFileSizeInvalid
 	}
+	categoryID := taxonomy.UncategorizedID
+	var selection taxonomy.Selection
+	if s.taxonomy != nil {
+		var selectionErr error
+		selection, selectionErr = s.taxonomy.ValidateSelection(ctx, req.CategoryID, req.Tags)
+		if selectionErr != nil {
+			return nil, selectionErr
+		}
+		categoryID = selection.CategoryID
+	}
 
 	pendingKey, err := newPendingObjectKey(userID)
 	if err != nil {
@@ -90,6 +108,7 @@ func (s *Service) Create(ctx context.Context, userID uint64, req CreateRequest) 
 	}
 	v := &Video{
 		UserID:      userID,
+		CategoryID:  categoryID,
 		Title:       title,
 		Description: description,
 		ObjectKey:   pendingKey,
@@ -99,6 +118,11 @@ func (s *Service) Create(ctx context.Context, userID uint64, req CreateRequest) 
 	}
 	if err := s.repo.Create(ctx, v); err != nil {
 		return nil, err
+	}
+	if s.taxonomy != nil {
+		if err := s.taxonomy.ApplyVideo(ctx, v.ID, selection); err != nil {
+			return nil, err
+		}
 	}
 
 	objectKey := fmt.Sprintf("videos/%d/%d/source.mp4", userID, v.ID)
@@ -190,6 +214,17 @@ func (s *Service) ListPublic(ctx context.Context, query ListQuery) (*ListRespons
 	if utf8.RuneCountInString(query.Query) > maxSearchQueryRunes {
 		return nil, ErrListQueryInvalid
 	}
+	if s.taxonomy != nil {
+		var err error
+		normalizedTags, err := s.taxonomy.NormalizeTags(query.Tags)
+		if err != nil {
+			return nil, err
+		}
+		query.Tags = make([]string, 0, len(normalizedTags))
+		for _, tag := range normalizedTags {
+			query.Tags = append(query.Tags, tag.Normalized)
+		}
+	}
 	switch query.Sort {
 	case "":
 		query.Sort = SortLatest
@@ -201,7 +236,54 @@ func (s *Service) ListPublic(ctx context.Context, query ListQuery) (*ListRespons
 	if err != nil {
 		return nil, err
 	}
+	if err := s.enrich(ctx, videos); err != nil {
+		return nil, err
+	}
 	return &ListResponse{Items: toVideoResponses(videos), Page: query.Page, PageSize: query.PageSize, Total: total}, nil
+}
+
+func (s *Service) Following(ctx context.Context, userID uint64, query ListQuery) (*ListResponse, error) {
+	if userID == 0 {
+		return nil, ErrUnauthorized
+	}
+	if err := validatePagination(query.Page, query.PageSize); err != nil {
+		return nil, err
+	}
+	query.Query = strings.TrimSpace(query.Query)
+	if utf8.RuneCountInString(query.Query) > maxSearchQueryRunes {
+		return nil, ErrListQueryInvalid
+	}
+	if query.Sort == "" {
+		query.Sort = SortLatest
+	}
+	if query.Sort != SortLatest && query.Sort != SortPopular {
+		return nil, ErrListQueryInvalid
+	}
+	videos, total, err := s.repo.ListFollowing(ctx, userID, query.Page, query.PageSize, query)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.enrich(ctx, videos); err != nil {
+		return nil, err
+	}
+	return &ListResponse{Items: toVideoResponses(videos), Page: query.Page, PageSize: query.PageSize, Total: total}, nil
+}
+
+func (s *Service) Related(ctx context.Context, videoID uint64) (*ListResponse, error) {
+	if videoID == 0 {
+		return nil, ErrNotFound
+	}
+	if _, err := s.repo.FindPublicByID(ctx, videoID); err != nil {
+		return nil, err
+	}
+	videos, err := s.repo.ListRelated(ctx, videoID, 6)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.enrich(ctx, videos); err != nil {
+		return nil, err
+	}
+	return &ListResponse{Items: toVideoResponses(videos), Page: 1, PageSize: len(videos), Total: int64(len(videos))}, nil
 }
 
 // Detail returns public playback metadata for an anonymous viewer.
@@ -230,6 +312,12 @@ func (s *Service) DetailForViewer(ctx context.Context, viewerID, videoID uint64)
 		}
 		result.ViewerState = state
 	}
+	single := []Video{*v}
+	if err := s.enrich(ctx, single); err != nil {
+		return nil, err
+	}
+	*v = single[0]
+	result.VideoResponse = toVideoResponse(v)
 	return result, nil
 }
 
@@ -279,6 +367,9 @@ func (s *Service) Mine(ctx context.Context, userID uint64, page, pageSize int) (
 	if err != nil {
 		return nil, err
 	}
+	if err := s.enrich(ctx, videos); err != nil {
+		return nil, err
+	}
 	return &OwnerListResponse{Items: toOwnerVideoResponses(videos), Page: page, PageSize: pageSize, Total: total}, nil
 }
 
@@ -287,6 +378,11 @@ func (s *Service) MineDetail(ctx context.Context, userID, videoID uint64) (*Owne
 	if err != nil {
 		return nil, err
 	}
+	single := []Video{*v}
+	if err := s.enrich(ctx, single); err != nil {
+		return nil, err
+	}
+	*v = single[0]
 	result := toOwnerVideoResponse(v)
 	return &result, nil
 }
@@ -302,13 +398,45 @@ func (s *Service) Update(ctx context.Context, userID, videoID uint64, req Update
 	if err != nil {
 		return nil, err
 	}
+	var selection taxonomy.Selection
+	if s.taxonomy != nil && (patch.CategoryID != nil || patch.Tags != nil) {
+		categoryID := v.CategoryID
+		tags := []string(nil)
+		if current, loadErr := s.taxonomy.ForVideos(ctx, []uint64{v.ID}); loadErr != nil {
+			return nil, loadErr
+		} else if existing, ok := current[v.ID]; ok {
+			for _, tag := range existing.Tags {
+				tags = append(tags, tag.DisplayName)
+			}
+		}
+		if patch.CategoryID != nil {
+			categoryID = *patch.CategoryID
+		}
+		if patch.Tags != nil {
+			tags = *patch.Tags
+		}
+		selection, err = s.taxonomy.ValidateSelection(ctx, categoryID, tags)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if err := s.repo.UpdateOwned(ctx, userID, v.ID, patch); err != nil {
 		return nil, err
+	}
+	if s.taxonomy != nil && (patch.CategoryID != nil || patch.Tags != nil) {
+		if err := s.taxonomy.ApplyVideo(ctx, v.ID, selection); err != nil {
+			return nil, err
+		}
 	}
 	updated, err := s.repo.FindByID(ctx, v.ID)
 	if err != nil {
 		return nil, err
 	}
+	single := []Video{*updated}
+	if err := s.enrich(ctx, single); err != nil {
+		return nil, err
+	}
+	*updated = single[0]
 	result := toOwnerVideoResponse(updated)
 	return &result, nil
 }
@@ -370,10 +498,48 @@ func buildVideoPatch(req UpdateRequest) (VideoPatch, error) {
 		}
 		patch.Visibility = &visibility
 	}
-	if patch.Title == nil && patch.Description == nil && patch.Visibility == nil {
+	if req.CategoryID != nil {
+		if *req.CategoryID == 0 {
+			return VideoPatch{}, taxonomy.ErrCategoryNotFound
+		}
+		patch.CategoryID = req.CategoryID
+	}
+	if req.Tags != nil {
+		tags := append([]string(nil), (*req.Tags)...)
+		patch.Tags = &tags
+	}
+	if patch.Title == nil && patch.Description == nil && patch.Visibility == nil && patch.CategoryID == nil && patch.Tags == nil {
 		return VideoPatch{}, ErrPatchEmpty
 	}
 	return patch, nil
+}
+
+func (s *Service) enrich(ctx context.Context, videos []Video) error {
+	if s.taxonomy == nil || len(videos) == 0 {
+		return nil
+	}
+	ids := make([]uint64, 0, len(videos))
+	for i := range videos {
+		ids = append(ids, videos[i].ID)
+	}
+	values, err := s.taxonomy.ForVideos(ctx, ids)
+	if err != nil {
+		return err
+	}
+	for i := range videos {
+		value, ok := values[videos[i].ID]
+		if !ok {
+			continue
+		}
+		if value.Category != nil {
+			videos[i].Category = &CategoryInfo{ID: value.Category.ID, Slug: value.Category.Slug, Name: value.Category.Name}
+		}
+		videos[i].Tags = make([]TagInfo, 0, len(value.Tags))
+		for _, tag := range value.Tags {
+			videos[i].Tags = append(videos[i].Tags, TagInfo{ID: tag.ID, Name: tag.DisplayName})
+		}
+	}
+	return nil
 }
 
 func parseVisibility(value string) (Visibility, bool) {

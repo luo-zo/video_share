@@ -61,7 +61,7 @@ Vite 侧新增的两处，是 `server.mjs` 原本不需要的：
 | L1 | 开发期 CSP 放宽：`script-src`/`style-src` 带 `'unsafe-inline'`（`vite.config.ts:93-112`），因为 Vite HMR 是内联注入模块脚本、运行时插 `<style>` | 严格 CSP（`script-src 'self'`、`style-src 'self'`）由 **T10 的 Nginx** 下发；开发期 CSP 不是生产口径 |
 | L2 | 开发服务器只绑 `127.0.0.1`（`host: '127.0.0.1'`、`strictPort: true`）。同源 Origin 校验因此退化为对本机来源的校验 | 这是**开发便利性**，不是生产安全边界。`server.mjs` 的 `isLocalOrigin` 同样只面向本机 |
 | L3 | **`vite preview` 不提供 SPA 回退**（`appType: 'mpa'` 且 `configureServer` 只在 `serve` 生效） | **不要用 `vite preview` 演示深链**（`/video/1` 会 404）。演示深链请用 `npm run dev`，或用 T10 的 Nginx |
-| L4 | 开发期**无 Cookie、无 CSRF 令牌**，身份是内存 Bearer | 刷新页面即登出；Cookie + CSRF + Origin 精确校验在 **T03** 落到 Go 后端（见 §3.3） |
+| L4 | T03 前开发期**无 Cookie、无 CSRF 令牌**，身份是内存 Bearer | T03 已落地 Cookie + CSRF + Origin 精确校验；访问 JWT 仍只在内存（见 §3.3） |
 | L5 | `server.mjs` 仍被 `vite.config.ts` 导入，**生命周期被延长到 T10** | T10 用 Nginx 取代后，`server.mjs` 与其测试才可删除。**在 T10 落地前不得删除 `server.mjs`** |
 
 **不变量：不允许“删掉 `server.mjs` 却不在任何地方替代这些检查”。** T01 之后，开发期边界的唯一实现是 `server.mjs`；若未来要移除它，必须先有等价实现（T10 的 Nginx 或 Go 后端中间件）并补对应测试。
@@ -127,13 +127,28 @@ Vite 侧新增的两处，是 `server.mjs` 原本不需要的：
 
 任务书要求测量**命中率**与**数据库查询次数**。禁止在没有对照数据时写出“接入 Redis 即性能提升”。缓存对比（关闭/冷缓存/热缓存）属于 T12。
 
+### 2.8 T02 实施边界（2026-09-23）
+
+- T02 采用可注入数据源的 JSON 缓存组件，不创建 `categories` 表、不新增分类迁移、不注册分类路由。
+- `000006_sessions_profiles` 仍由 T03 使用；`000007_taxonomy` 由 T05 创建 `categories`、`tags`、`video_tags` 并接入 `video_share:cache:categories:v1`。
+- 缓存未命中或 Redis 不可用时，组件回源注入的数据源；同一键的并发回源通过 singleflight 合并，并受并发槽位限制。
+- 登录/注册 Redis 限流不可用时返回 `503 RATE_LIMIT_UNAVAILABLE`；评论限流退化为有界进程内令牌桶并记录降级计数。
+- T02 已在 `REQUIRE_INTEGRATION_TESTS=true`、专用 `TEST_REDIS_DB` 下用真实 Redis 验证缓存读写/失效，以及两个独立 Redis 客户端共享同一限流配额；缓存集成键使用唯一测试命名空间，尚未进行性能压测。
+
+### 2.9 T03 会话边界（2026-09-23）
+
+- 访问 JWT 默认 15 分钟并携带 `sid`；旧的无 `sid` JWT 不再通过生产路由鉴权。
+- MySQL 的 `session_families` / `refresh_tokens` 是撤销与轮换权威；刷新令牌只存 SHA-256 摘要，浏览器只接收 host-only、HttpOnly、SameSite=Lax Cookie。
+- refresh 轮换按 family 加锁；旧令牌在 10 秒内返回 `409 REFRESH_CONFLICT`，窗口外重放撤销整个 family 并返回 `401 SESSION_REUSED`。
+- 登录、刷新、退出和资料写入要求精确 `APP_ORIGIN`、双提交 CSRF Cookie/请求头及 JSON Content-Type；网络错误不自动清空前端内存会话。
+
 ---
 
 ## 3. 会话口径
 
-### 3.1 现有实现（将被 T03 取代）
+### 3.1 T03 前历史基线
 
-当前是**单一无状态 JWT**：`internal/token/token.go` 的 `Manager` 用 HS256 签发 `{uid, iss, sub, iat, exp}`，`JWT_TTL_SECONDS` 默认 **86400（24 小时）**，**没有服务端会话状态、无法撤销**。前端把 token 只放内存（`auth.js:87`），刷新页面即登出。
+T03 前是**单一无状态 JWT**：`internal/token/token.go` 的 `Manager` 用 HS256 签发 `{uid, iss, sub, iat, exp}`，`JWT_TTL_SECONDS` 默认 **86400（24 小时）**，**没有服务端会话状态、无法撤销**。前端把 token 只放内存（`auth.js:87`），刷新页面即登出。以下表格保留用于说明本批改动前的差距。
 
 这与任务书 4.2 的差距是结构性的，不是参数调整：
 
@@ -174,6 +189,17 @@ Vite 侧新增的两处，是 `server.mjs` 原本不需要的：
 ### 3.4 重试策略
 
 **不统一自动重试所有业务 POST。** 只对“已知在执行业务前被鉴权拒绝”的请求刷新后**重试一次**；超时后的写请求遵循各自幂等规则（评论/举报用 `operation_receipts`，见下）。
+
+### 3.5 T03 实现验证
+
+T03 已按上述口径接入 Go 路由与 Vue 客户端。单元测试覆盖 Cookie 属性、CSRF、资料响应、sid 校验、冲突/重放错误映射、前端 single-flight 和退出竞态；真实 MySQL 隔离集成覆盖并发轮换、窗口外重放撤销整族、refresh-only logout 和迁移恢复。未把任何性能结论提前写入简历，性能对比留到 T12。
+
+### 3.6 T04 公开主页边界（2026-09-23）
+
+- 创作者主页只查询 `users.status=normal`；不存在和禁用账号统一返回 `NOT_FOUND`，避免通过计数或分页侧信道确认账号状态。
+- 公开作品必须同时满足 `status=ready`、`visibility=public` 和正常作者；私密、处理中、删除作品不进入总数或分页结果。
+- 粉丝与关注列表只返回 ID、用户名和昵称，关系两端均过滤禁用账号；`following` 只在主页可选鉴权成功时计算。
+- T04 不引入公开资料共享缓存；缓存候选与权限校验留在 T05/T10 的边界内。
 
 ---
 
@@ -309,10 +335,7 @@ Vite 侧新增的两处，是 `server.mjs` 原本不需要的：
 
 1. **端口：** 前端 `5173`、后端 `8081`（与现状及任务书一致，不改）。
 2. **换行符（B2）：** 建议新增 `.gitattributes`，对 `*.go`、`*.sql`、`*.ts`、`*.vue` 声明 `eol=lf`，并在 CI 用 LF 检出，使 `gofmt -l`、prettier 在本地与 CI 结果一致。当前 Windows 工作区的 CRLF 会让 `gofmt -l` 产生约 36 个假失败。
-3. **集成测试权限（B1，高优先级）：** 应用账号 `video_share` **无 `CREATE DATABASE` 权限**，集成测试静默跳过或被拒。T10 必须落实其一：
-   - 为专用测试账号授予建库/删库权限，CI 与本地用该账号；
-   - 或明确使用 root DSN 并写入文档（**仅限一次性测试库，不触碰业务库**）。
-   并实现 `REQUIRE_INTEGRATION_TESTS=true`：**关键依赖缺失或连不上时直接失败**，而不是跳过。普通开发模式可跳过，但**必须报告为“未验证”**。
+3. **集成测试权限（B1，T10 已定）：** 应用账号 `video_share` **无 `CREATE DATABASE` 权限**。本地与 CI 当前明确使用各自一次性 MySQL 服务的 root DSN，`testutil.MySQLDSN` 不设默认业务库，只按进程 ID 和计数器创建唯一测试库，并在清理时只删除该库；备份演练创建两个这样的库。绝不把生产 root DSN 填入测试环境。以后可改用仅有测试库权限的专用账号，但需先验证建库/删库授权。`REQUIRE_INTEGRATION_TESTS=true` 让关键依赖缺失时直接失败；普通开发模式跳过的用例必须报告为“未验证”。
 4. **Redis / Nginx 固定版本**（不用 `latest`），沿用 compose 现有做法（`mysql:8.0`、`minio:RELEASE.2025-09-07T16-13-09Z`、`apache/kafka:4.0.0`）。
 5. **不引入**任务书明确后置的技术：微服务、Elasticsearch、Kubernetes、Redis Pub/Sub 替代 Kafka、Prometheus/Grafana（可选增强）。
 6. **不提交密钥。** `.gitignore` 已忽略 `.env`、`.claude/`、`.worktrees/`。注意 `.claude/settings.local.json` 中已出现历史命令含数据库口令，该目录已忽略，但**不得复制该口令到任何提交内容或文档**。
@@ -331,6 +354,65 @@ Vite 侧新增的两处，是 `server.mjs` 原本不需要的：
 |---|---|---|---|
 | Q1 | 开发期安全边界由 Vite 还是自定义中间件承担（§1.3） | T01 | **已定**：Vite 复用 `server.mjs` 的 `createApiMiddleware`（`devApiBoundary` 插件），另加 `appType: 'mpa'` 与路径归一化；局限 L1–L5 见 §1.3 |
 | Q2 | `docs/stage5/*.md` 是否提交 git | T00 | 先留在工作区，等用户决定 |
-| Q3 | 集成测试用专用账号还是 root（§7.3） | T10、T11 | 倾向新增专用测试账号并授予建库权限；在 T10 决定 |
+| Q3 | 集成测试用专用账号还是 root（§7.3） | T10、T11 | **已定**：仅本地/CI 一次性 MySQL 服务使用 root DSN，唯一测试库自动创建/删除；生产环境禁止使用 |
 
 除上述三项外，第 1–7 节记录的口径均直接来自任务书，视为已定。
+
+## 9. T05 分类、标签与推荐决策（2026-09-23）
+
+- `000007_taxonomy.sql` 只做增量迁移；历史视频的 `category_id` 默认指向固定的“未分类”记录，不清空业务数据。
+- 标签在服务层先做 Unicode NFC、去首尾空白、Unicode 小写和去重；每个标签 1–20 个 Unicode 字符，单次最多 5 个。数据库唯一键负责并发下最终去重。
+- Redis 仅缓存启用分类列表，使用既有 `video_share:cache:categories:v1`、300 秒 TTL + 抖动和 MySQL 回源；分类缓存不是权限来源。
+- 关注流和相关推荐的候选 ID/查询结果都必须在 MySQL 侧再次应用正常作者、ready、public 条件；相关推荐按同分区、共同标签数、累计播放/点赞、发布时间和 ID 固定排序，最多返回 6 条。
+- 旧投稿/编辑请求不带新增字段时保持兼容；旧投稿落入未分类。分类管理与榜单缓存不在 T05 提前扩展，分别留给治理和 T09。
+
+## 10. T06 回复、通知与幂等决策（2026-09-23）
+
+- `000008_notifications_replies.sql` 只做加法：历史评论 `parent_id/root_id` 回填为根评论；通知和收据以 MySQL 为权威，Redis 不参与一致性。
+- `parent_id` 必须指向同一公开视频中未删除的评论；回复的 `root_id` 固定为根评论，回复回复仍归入同一线程；删除评论在服务响应中显示“评论已删除”占位。
+- 评论和关注写请求使用操作者 + action + request_id 唯一收据，收据保存 SHA-256 请求摘要与资源 ID；同 ID 不同摘要返回 409，不重复关系、计数或通知。
+- 通知只保存事件类型和目标 ID，接收人去重、排除操作者；评论/回复/关注通知与业务写入在同一数据库事务内提交。未读数读取 MySQL，前台 30 秒轮询，页面隐藏暂停。
+- 通知写操作在前端使旧轮询 generation 失效，并在成功后重新读取全局未读数；首屏之外的未读通知不会被当前页数量覆盖。
+
+## 11. T07 举报与治理决策（2026-09-23）
+
+- `moderation_status` 是视频/评论的公开可见性开关；公开查询、关注流、相关推荐、个人收藏/历史、评论和媒体签名入口统一要求 `visible`，MySQL 是最终权限来源。
+- 举报活动唯一键采用 `reporter_id + target_type + target_id`，结案时清空；因此同一目标可在前一举报结案后再次举报，但活动期间不会重复打开。
+- 管理员权限不写入 JWT 快照。`RequireAdmin` 每次请求读取数据库当前 `role/status`；CLI 负责显式授予/撤回，最后一个正常管理员受保护，管理员不能禁用自己。
+- 接单先锁举报行再锁操作收据，固定锁顺序让并发接单表现为一个成功和一个状态冲突；处置、状态迁移、评论计数、审计和通知在一个 MySQL 事务提交。
+- T10 真实并发门禁补充：结案和带 `report_id` 的直接处置一律先锁举报主键，再查幂等收据，最后锁目标；创建举报先非锁定查询活动键对应 ID，再按主键锁定复核，避免次级索引→主键与结案的主键→次级索引死锁。直接处置的收据摘要包含 `report_id`，关联目标不一致拒绝；并发已把目标设为相同状态时只记录如实的无状态变化审计，不重复向目标所有者发状态变化通知。
+- 同 actor `report.create` / `report.resolve` 的缺失收据在 InnoDB RR 下仍可能持有相邻间隙锁。治理写事务保留 MySQL 默认隔离级别，仅对 1213 做最多 4 次额外整事务重试；所有副作用均在事务内，非 1213 或请求已取消不重试。该机制是有界恢复，不保证无限争用下永不返回失败。
+- 禁用用户在同一事务撤销其所有未撤销 `session_families`；刷新时仍检查 `users.status`，作为治理事务与刷新并发之间的第二道防线。
+- 用户禁用/启用与 CLI 管理员撤回均先按 `id ASC` 锁定管理员集合，再锁定目标用户；最后一个正常管理员不能被并发移除。
+- 000009 的新增列、索引和表使用 information_schema 存在性检查与 `CREATE TABLE IF NOT EXISTS`，允许 MySQL 已提交部分 DDL、Goose 版本未记录时安全重试。
+- 举报入口沿用 Redis 固定窗口 5 次/10 分钟，key 按用户而不是 IP；Redis 故障回退有界本地限流，登录/注册仍保持故障关闭策略。
+- 恢复已删除视频/评论直接拒绝；已发出的 MinIO 预签名地址不能被本迁移瞬时撤回，残余有效窗口在 T11 实测记录。
+
+## 12. T08 有效观看与创作者指标决策（2026-09-23）
+
+- 观看时长只接受服务端确认的可见播放墙钟增量；客户端 `position_ms` 仅用于进度和完播判断，不能用拖动差值或 `playbackRate` 铸造观看时长。
+- 每个播放标签页持有独立 24 小时 `watch_sessions`，序号重复/乱序幂等；同一用户/视频的 `watch_histories.last_watch_credit_at` 作为跨标签页共享上限，MySQL 行锁保证并发下只计一次。
+- 有效播放在单会话累计达到 `min(3s, duration)` 时计数一次；完播要求 ended、接近视频尾部且有效观看达到 80%。旧总播放字段继续兼容，同时写入可重建的日指标。
+- 日指标按上海自然日写入视频和创作者两级表；关系变更与指标在同一事务内完成，历史趋势不从当前总量倒推。
+- 断点续播只返回当前用户自己的 `watch_histories` 进度，接近尾部的进度视为已看完并从 0 开始；视频/作者当前不可见时会话创建和心跳均拒绝。
+- 数据中心只展示正常账号的公开 ready 视频和 MySQL 汇总；前端只负责呈现，不把本地播放事件当作统计成功，也不提前写性能结论。
+
+## 13. T09 榜单快照决策（2026-09-23）
+
+- 榜单评分遵循任务书初版合同：有效播放次数为主，正向净点赞/收藏/评论分别按 3/5/2 加权；负净变化仍保留在趋势表，只在榜单评分时按 0 处理。观看时长与完播不另行偷偷改变分数。
+- Redis ZSET 只保存按日期命名的候选 ID 与分数。构建顺序是 MySQL 聚合 → 临时 ZSET → 设置有限 TTL → `RENAME` 原子替换；构建失败不覆盖旧完整快照。分布式锁保存随机 owner，释放使用 compare-and-delete Lua，锁过期后可恢复。
+- 读取先取 Redis 候选，再用 MySQL 当前视频/作者状态过滤并补足页面；Redis 不是权限来源，也不保存永久热度事实。缓存丢失时直接以 MySQL 日指标重建排序。
+- CLI 默认常驻每 60 秒重建 day/week；`RANKING_REBUILD_ONCE=1` 用于 cron/验收单次执行，避免测试进程常驻。
+- Redis 命中读取按固定批次回查可见性，避免一次性把整榜候选和 `IN` 参数加载进内存；Redis 缺失或不可用时以 4 个并发槽位限制 MySQL 聚合回源，槽位耗尽返回 503。
+- 日榜/周榜没有可见指标候选时，回退到 MySQL 最新公开 ready/public/visible/正常作者视频，分数保持 0；该兜底仍受当前权限过滤，Redis 不产生虚假热度。
+
+## 14. T12 本机基线口径（2026-09-24）
+
+- 压测工具固定为官方 `grafana/k6:2.3.0` 容器，不安装全局 k6、不使用 `latest`。脚本目标固定为本机隔离 API；runner 拒绝普通开发端口与非 `stage5-smoke-*` Compose 项目。
+- 每个 VU 请求后暂停 100 ms，避免低延迟本机接口在固定 VU 模式中无上限自旋。5 VU × 15 秒的数值因此代表约 50 req/s 的有界本机基线，不是压力极限。
+- “冷”只删除本轮分类或榜单的精确版本化 key 后测一个请求；榜单读取的缓存缺失会经 MySQL 回源。不得把单次冷样本报告成 P95/P99。
+- “热”分类先读一次填充 JSON cache；“热”榜单通过现有 rebuild CLI 生成 ZSET 与 metadata 后再读。Redis outage 是停用隔离 Redis 的回退测量，不是对业务代码增加 cache-disable 开关。
+- 用户权限通过响应内容断言（榜单每项必须 `ready/public`）和计时外匿名评论写入 401 探针核验。主性能 workload 是只读，避免插入无法精确回收的大量互动数据。
+- MySQL Questions 与 Redis keyspace hit/miss 是全实例差值，容器内健康检查、后台榜单任务与其它并发请求可能共同贡献；CPU/内存来自约 1 秒一次的 Docker 采样。报告只称观察指标，不称 handler 的精确 SQL 计数或宿主机 profile。
+- 每种持续条件重复三次保留原始 k6 JSON；异常结果不通过删除或平均处理掩盖。未测的整段连续播放、长稳态、极限并发及生产硬件能力不外推。
+- API 请求和媒体分片读取分别测量；本地 HLS 签名 URL 指向 `127.0.0.1:19000`，所以独立媒体 k6 容器使用 host networking 并限制在 5 VU 内，避免在 Docker bridge 中把无法解析的宿主 loopback 错判为媒体接口故障。媒体样本只取合成视频的一个固定 MPEG-TS 分片，不能代替完整播放/公网或 CDN 测量。

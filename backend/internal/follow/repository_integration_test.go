@@ -12,6 +12,7 @@ import (
 	"gorm.io/gorm"
 
 	"video_share/internal/database"
+	"video_share/internal/notification"
 	"video_share/internal/testutil"
 	"video_share/internal/user"
 )
@@ -42,6 +43,34 @@ func openFollowTestDB(t *testing.T) *gorm.DB {
 		}
 	})
 	return db
+}
+
+func TestFollowNotificationIsTransactionalAndIdempotent(t *testing.T) {
+	db := openFollowTestDB(t)
+	alice, bob, _, _ := seedFollowUsers(t, db)
+	repo := NewRepository(db)
+	requestRepo, ok := repo.(interface {
+		SetFollowWithRequest(context.Context, uint64, uint64, bool, string) (*FollowState, error)
+	})
+	if !ok {
+		t.Fatal("repository does not expose request-aware follow")
+	}
+	if _, err := requestRepo.SetFollowWithRequest(context.Background(), alice, bob, true, "follow-1"); err != nil {
+		t.Fatalf("follow: %v", err)
+	}
+	if _, err := requestRepo.SetFollowWithRequest(context.Background(), alice, bob, true, "follow-1"); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if _, err := requestRepo.SetFollowWithRequest(context.Background(), alice, bob, false, "follow-1"); !errors.Is(err, notification.ErrReceiptConflict) {
+		t.Fatalf("conflict = %v", err)
+	}
+	var count int64
+	if err := db.Raw("SELECT COUNT(*) FROM notifications WHERE recipient_id = ? AND type = 'follow'", bob).Scan(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("follow notifications = %d, want 1", count)
+	}
 }
 
 func seedFollowUsers(t *testing.T, db *gorm.DB) (alice, bob, carol, disabled uint64) {

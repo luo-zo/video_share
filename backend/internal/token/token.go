@@ -13,7 +13,8 @@ var ErrInvalidToken = errors.New("invalid token")
 
 // Claims 携带已认证的用户 ID 以及标准的注册声明。
 type Claims struct {
-	UserID uint64 `json:"uid"`
+	UserID    uint64 `json:"uid"`
+	SessionID string `json:"sid,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -36,9 +37,17 @@ func NewManager(secret, issuer string, ttl time.Duration) *Manager {
 
 // Generate 为给定用户 ID 签发令牌，并连同其有效时长一起返回。
 func (m *Manager) Generate(userID uint64) (string, time.Duration, error) {
+	return m.GenerateWithSession(userID, "")
+}
+
+// GenerateWithSession signs an access token bound to a durable session family.
+// Generate remains available for migration-era tests and non-session tokens;
+// authenticated production routes use the sid-bearing variant.
+func (m *Manager) GenerateWithSession(userID uint64, sessionID string) (string, time.Duration, error) {
 	now := m.now()
 	claims := Claims{
-		UserID: userID,
+		UserID:    userID,
+		SessionID: sessionID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    m.issuer,
 			Subject:   strconv.FormatUint(userID, 10),

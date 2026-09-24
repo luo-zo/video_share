@@ -1,0 +1,149 @@
+{
+    "metrics": {
+        "http_req_connecting": {
+            "max": 2.272116,
+            "p(90)": 1.8002956,
+            "p(95)": 2.1028835499999996,
+            "p(99)": 2.22346623,
+            "avg": 0.25683527500000003,
+            "min": 0,
+            "med": 0
+        },
+        "vus": {
+            "value": 5,
+            "min": 5,
+            "max": 5
+        },
+        "data_received": {
+            "count": 44760,
+            "rate": 2817.774826079327
+        },
+        "http_req_waiting": {
+            "min": 1007.269577,
+            "med": 2008.1287315,
+            "max": 2011.746673,
+            "p(90)": 2010.7562839,
+            "p(95)": 2011.1688369,
+            "p(99)": 2011.60381912,
+            "avg": 1883.4410040000007
+        },
+        "checks": {
+            "passes": 80,
+            "fails": 0,
+            "thresholds": {
+                "rate==1": false
+            },
+            "value": 1
+        },
+        "http_req_blocked": {
+            "p(99)": 5.15715606,
+            "avg": 0.6298023249999998,
+            "min": 0.002003,
+            "med": 0.006543,
+            "max": 5.214504,
+            "p(90)": 4.8383592,
+            "p(95)": 4.946616099999999
+        },
+        "http_req_failed": {
+            "fails": 40,
+            "passes": 0,
+            "thresholds": {
+                "rate==0": false
+            },
+            "value": 0
+        },
+        "http_req_sending": {
+            "p(95)": 0.11376504999999981,
+            "p(99)": 0.19818104999999997,
+            "avg": 0.031885350000000014,
+            "min": 0.005862,
+            "med": 0.016496999999999998,
+            "max": 0.214251,
+            "p(90)": 0.0516756
+        },
+        "iterations": {
+            "count": 40,
+            "rate": 2.518118700696449
+        },
+        "http_reqs": {
+            "count": 40,
+            "rate": 2.518118700696449
+        },
+        "vus_max": {
+            "value": 5,
+            "min": 5,
+            "max": 5
+        },
+        "http_req_duration{expected_response:true}": {
+            "p(95)": 2011.5291149500001,
+            "p(99)": 2011.94292178,
+            "avg": 1883.5972319000005,
+            "min": 1007.361946,
+            "med": 2008.3360245,
+            "max": 2011.97338,
+            "p(90)": 2010.9357279
+        },
+        "data_sent": {
+            "count": 3960,
+            "rate": 249.29375136894848
+        },
+        "http_req_receiving": {
+            "avg": 0.12434255000000001,
+            "min": 0.029999,
+            "med": 0.07494600000000001,
+            "max": 1.333301,
+            "p(90)": 0.17585510000000004,
+            "p(95)": 0.2617411499999996,
+            "p(99)": 0.9702055399999996
+        },
+        "iteration_duration": {
+            "max": 2114.207492,
+            "p(90)": 2114.0180743,
+            "p(95)": 2114.1522633500003,
+            "p(99)": 2114.20093103,
+            "avg": 1985.9194663500002,
+            "min": 1108.20139,
+            "med": 2110.627751
+        },
+        "http_req_tls_handshaking": {
+            "avg": 0,
+            "min": 0,
+            "med": 0,
+            "max": 0,
+            "p(90)": 0,
+            "p(95)": 0,
+            "p(99)": 0
+        },
+        "http_req_duration": {
+            "avg": 1883.5972319000005,
+            "min": 1007.361946,
+            "med": 2008.3360245,
+            "max": 2011.97338,
+            "p(90)": 2010.9357279,
+            "p(95)": 2011.5291149500001,
+            "p(99)": 2011.94292178
+        }
+    },
+    "root_group": {
+        "checks": {
+            "categories returns HTTP 200": {
+                "id": "743026e9c64c3459e300139fa3b5acc8",
+                "passes": 40,
+                "fails": 0,
+                "name": "categories returns HTTP 200",
+                "path": "::categories returns HTTP 200"
+            },
+            "categories envelope contains enabled items": {
+                "passes": 40,
+                "fails": 0,
+                "name": "categories envelope contains enabled items",
+                "path": "::categories envelope contains enabled items",
+                "id": "b622532405a972f6737a92fdd8f9faae"
+            }
+        },
+        "name": "",
+        "path": "",
+        "id": "d41d8cd98f00b204e9800998ecf8427e",
+        "groups": {}
+    }
+}

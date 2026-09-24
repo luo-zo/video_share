@@ -2,13 +2,16 @@
 import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
-import { communityClient, videoClient } from '../api';
+import { communityClient, taxonomyClient, videoClient } from '../api';
 import { CommunityError, validateComment } from '../api/community';
 import type { CommentItem } from '../api/community';
+import type { Category } from '../api/taxonomy';
 import { VideoError } from '../api/video';
 import type { FieldErrors } from '../api/client';
 import type { VideoItem } from '../api/video';
-import CommentList from '../components/CommentList.vue';
+import CommentThread from '../components/CommentThread.vue';
+import ReportDialog from '../components/ReportDialog.vue';
+import VideoCard from '../components/VideoCard.vue';
 import VideoPlayer from '../components/VideoPlayer.vue';
 import { useAuthStore } from '../stores/auth';
 
@@ -17,6 +20,7 @@ const router = useRouter();
 const auth = useAuthStore();
 const video = ref<VideoItem | null>(null);
 const comments = ref<readonly CommentItem[]>([]);
+const related = ref<readonly VideoItem[]>([]);
 const loading = ref(false);
 const error = ref('');
 const copyMessage = ref('');
@@ -24,6 +28,7 @@ const comment = ref('');
 const commentError = ref('');
 const commenting = ref(false);
 const deletingComment = ref<string | number | null>(null);
+const deletedCommentIds = ref<readonly (string | number)[]>([]);
 const relationBusy = ref('');
 const liked = ref(false);
 const favorited = ref(false);
@@ -35,7 +40,8 @@ const confirmingDelete = ref(false);
 const ownerBusy = ref(false);
 const ownerError = ref('');
 const ownerFieldErrors = ref<FieldErrors>({});
-const edit = reactive({ title: '', description: '', visibility: 'public' });
+const categories = ref<readonly Category[]>([]);
+const edit = reactive({ title: '', description: '', visibility: 'public', categoryId: '1', tags: '' });
 const title = ref<HTMLElement | null>(null);
 let activeRequest: AbortController | null = null;
 let routeGeneration = 0;
@@ -63,6 +69,12 @@ function syncVideo(item: VideoItem): void {
   edit.title = typeof item.title === 'string' ? item.title : '';
   edit.description = typeof item.description === 'string' ? item.description : '';
   edit.visibility = typeof item.visibility === 'string' ? item.visibility : 'public';
+  const categoryID = Number(item.category_id ?? (item.category as { id?: unknown } | undefined)?.id);
+  edit.categoryId = Number.isInteger(categoryID) && categoryID > 0 ? String(categoryID) : '1';
+  const tags = Array.isArray(item.tags)
+    ? item.tags.map((tag) => typeof tag === 'string' ? tag : (tag as { name?: unknown; display_name?: unknown }).name ?? (tag as { display_name?: unknown }).display_name).filter((tag): tag is string => typeof tag === 'string' && tag.trim().length > 0)
+    : [];
+  edit.tags = tags.join(', ');
 }
 
 async function load(): Promise<void> {
@@ -76,9 +88,11 @@ async function load(): Promise<void> {
   copyMessage.value = '';
   video.value = null;
   comments.value = [];
+  related.value = [];
   relationBusy.value = '';
   commenting.value = false;
   deletingComment.value = null;
+  deletedCommentIds.value = [];
   editing.value = false;
   confirmingDelete.value = false;
   ownerBusy.value = false;
@@ -95,6 +109,9 @@ async function load(): Promise<void> {
       const commentPage = await communityClient.listComments(id, { page: 1, pageSize: 50, signal: controller.signal });
       if (controller.signal.aborted || !isCurrent(generation, id)) return;
       comments.value = commentPage.items;
+      const relatedPage = await videoClient.listRelated(id, { signal: controller.signal });
+      if (controller.signal.aborted || !isCurrent(generation, id)) return;
+      related.value = relatedPage.items;
     }
     await nextTick();
     if (isCurrent(generation, id)) title.value?.focus();
@@ -175,7 +192,7 @@ async function removeComment(item: CommentItem): Promise<void> {
   try {
     await communityClient.deleteComment(item.id);
     if (!isCurrent(generation, id)) return;
-    comments.value = comments.value.filter((entry) => String(entry.id) !== String(item.id));
+    deletedCommentIds.value = [...deletedCommentIds.value, item.id];
   } catch (caught) {
     if (!isCurrent(generation, id)) return;
     error.value = caught instanceof Error ? caught.message : '评论删除失败。';
@@ -198,7 +215,11 @@ async function saveOwnerEdit(): Promise<void> {
   if (!video.value) return;
   const generation = routeGeneration;
   const id = String(video.value.id);
-  const changes = { ...edit };
+  const changes = {
+    ...edit,
+    categoryId: edit.categoryId,
+    tags: edit.tags.split(',').map((tag) => tag.trim()).filter(Boolean),
+  };
   ownerBusy.value = true; ownerError.value = ''; ownerFieldErrors.value = {};
   try {
     const updated = await videoClient.updateVideo(id, changes);
@@ -232,12 +253,10 @@ async function deleteOwnedVideo(): Promise<void> {
   }
 }
 
-function reportWatch(payload: { progressMs: number; durationMs: number; keepalive: boolean }): void {
-  if (!auth.isAuthenticated || !video.value) return;
-  void communityClient.reportWatch(video.value.id, payload).catch(() => undefined);
-}
-
 watch([videoId, ownerMode], () => void load(), { immediate: true });
+if (taxonomyClient && typeof taxonomyClient.listCategories === 'function') {
+  void taxonomyClient.listCategories().then((result) => { categories.value = result.items; }).catch(() => { categories.value = []; });
+}
 onUnmounted(() => {
   routeGeneration += 1;
   activeRequest?.abort();
@@ -252,14 +271,14 @@ onUnmounted(() => {
       <div v-if="loading" class="empty-state"><p>正在准备放映…</p></div>
       <template v-else-if="video">
         <article class="detail-card">
-          <VideoPlayer :video="video" @error="error = $event" @progress="reportWatch" />
+        <VideoPlayer :video="video" :watch-session-enabled="auth.isAuthenticated && canUseCommunity" @error="error = $event" />
           <div class="detail-copy">
             <div class="detail-meta"><span :class="`status-chip status-${video.status || 'ready'}`">{{ video.status || 'ready' }}</span><span>{{ video.created_at?.slice(0, 10) }}</span></div>
             <h2 id="detail-title" ref="title" tabindex="-1">{{ video.title || '未命名视频' }}</h2>
             <p class="detail-description">{{ video.description || '创作者还没有写简介。' }}</p>
-            <p class="detail-author">BY {{ video.author?.nickname || video.author?.username || '匿名创作者' }}</p>
+            <p class="detail-author">BY <RouterLink v-if="video.author?.id" :to="`/creator/${video.author.id}`">{{ video.author?.nickname || video.author?.username || '匿名创作者' }}</RouterLink><span v-else>{{ video.author?.nickname || video.author?.username || '匿名创作者' }}</span></p>
             <p class="detail-media-facts">{{ video.stats?.view_count ?? 0 }} 播放 · {{ video.stats?.comment_count ?? comments.length }} 评论</p>
-            <button class="soft-button" type="button" @click="copyPageLink">复制页面链接</button><p class="form-message" aria-live="polite">{{ copyMessage }}</p>
+             <button class="soft-button" type="button" @click="copyPageLink">复制页面链接</button><ReportDialog v-if="canUseCommunity" target-type="video" :target-i-d="video.id" /><p class="form-message" aria-live="polite">{{ copyMessage }}</p>
           </div>
         </article>
         <div v-if="canUseCommunity" class="detail-actions"><div class="action-bar">
@@ -269,10 +288,11 @@ onUnmounted(() => {
         </div></div>
         <section v-if="isOwner" class="detail-owner" aria-labelledby="owner-heading">
           <button v-if="!editing && !confirmingDelete" class="soft-button" type="button" @click="editing = true">编辑投稿</button>
-          <form v-if="editing" class="owner-edit" @submit.prevent="saveOwnerEdit"><h3 id="owner-heading" class="owner-edit-heading">编辑“{{ video.title }}”</h3><label for="owner-title">标题</label><input id="owner-title" v-model="edit.title" class="owner-title"><p class="field-error">{{ ownerFieldErrors.title }}</p><label for="owner-description">简介</label><textarea id="owner-description" v-model="edit.description" class="owner-description"></textarea><p class="field-error">{{ ownerFieldErrors.description }}</p><label for="owner-visibility">可见性</label><select id="owner-visibility" v-model="edit.visibility" class="owner-visibility"><option value="public">公开</option><option value="private">私密</option></select><p class="field-error">{{ ownerFieldErrors.visibility }}</p><p v-if="ownerError" class="form-message is-error" role="alert">{{ ownerError }}</p><button class="owner-save" type="submit" :disabled="ownerBusy">保存修改</button><button class="owner-delete" type="button" @click="editing = false; confirmingDelete = true">删除投稿</button></form>
+          <form v-if="editing" class="owner-edit" @submit.prevent="saveOwnerEdit"><h3 id="owner-heading" class="owner-edit-heading">编辑“{{ video.title }}”</h3><label for="owner-title">标题</label><input id="owner-title" v-model="edit.title" class="owner-title"><p class="field-error">{{ ownerFieldErrors.title }}</p><label for="owner-description">简介</label><textarea id="owner-description" v-model="edit.description" class="owner-description"></textarea><p class="field-error">{{ ownerFieldErrors.description }}</p><label for="owner-category">分区</label><select id="owner-category" v-model="edit.categoryId" class="owner-category"><option v-if="!categories.length" value="1">未分类</option><option v-for="category in categories" :key="category.id" :value="String(category.id)">{{ category.name }}</option></select><p class="field-error">{{ ownerFieldErrors.category_id }}</p><label for="owner-tags">标签 <span>最多 5 个，用逗号分隔</span></label><input id="owner-tags" v-model="edit.tags" class="owner-tags" maxlength="120" placeholder="例如：旅行, 猫咪"><p class="field-error">{{ ownerFieldErrors.tags }}</p><label for="owner-visibility">可见性</label><select id="owner-visibility" v-model="edit.visibility" class="owner-visibility"><option value="public">公开</option><option value="private">私密</option></select><p class="field-error">{{ ownerFieldErrors.visibility }}</p><p v-if="ownerError" class="form-message is-error" role="alert">{{ ownerError }}</p><button class="owner-save" type="submit" :disabled="ownerBusy">保存修改</button><button class="owner-delete" type="button" @click="editing = false; confirmingDelete = true">删除投稿</button></form>
           <div v-if="confirmingDelete" class="delete-confirmation" role="alertdialog" aria-modal="true"><strong>确认删除“{{ video.title }}”？</strong><p>删除后无法恢复。</p><button class="confirm-cancel" type="button" @click="confirmingDelete = false">取消</button><button class="confirm-delete" type="button" :disabled="ownerBusy" @click="deleteOwnedVideo">确认删除</button></div>
         </section>
-        <section v-if="canUseCommunity" id="comments" class="detail-comments" aria-labelledby="comments-heading"><h3 id="comments-heading" class="comments-heading">评论</h3><form class="comment-composer" @submit.prevent="addComment"><label class="sr-only" for="comment-input">写评论</label><textarea id="comment-input" v-model="comment" class="comment-input" maxlength="500" placeholder="写下你的想法"></textarea><p class="comment-error" aria-live="polite">{{ commentError }}</p><button class="comment-submit" type="submit" :disabled="commenting">{{ commenting ? '发布中…' : '发布评论' }}</button></form><CommentList :comments="comments" :viewer-id="viewerId" :deleting-id="deletingComment" @delete="removeComment" /></section>
+        <section v-if="canUseCommunity" id="comments" class="detail-comments" aria-labelledby="comments-heading"><h3 id="comments-heading" class="comments-heading">评论</h3><form class="comment-composer" @submit.prevent="addComment"><label class="sr-only" for="comment-input">写评论</label><textarea id="comment-input" v-model="comment" class="comment-input" maxlength="500" placeholder="写下你的想法"></textarea><p class="comment-error" aria-live="polite">{{ commentError }}</p><button class="comment-submit" type="submit" :disabled="commenting">{{ commenting ? '发布中…' : '发布评论' }}</button></form><CommentThread :video-id="video.id" :comments="comments" :viewer-id="viewerId" :deleting-id="deletingComment" :deleted-ids="deletedCommentIds" @delete="removeComment" /></section>
+        <section v-if="related.length" class="detail-related" aria-labelledby="related-heading"><h3 id="related-heading" class="comments-heading">相关推荐</h3><div class="video-grid"><VideoCard v-for="item in related" :key="item.id" :video="item" /></div></section>
       </template>
     </section>
   </div>

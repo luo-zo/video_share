@@ -531,8 +531,8 @@ func TestCommentTransaction(t *testing.T) {
 			t.Fatalf("comment_count = %d, want 0", got)
 		}
 		items, total, err := repo.ListComments(ctx, vid, 1, 12)
-		if err != nil || total != 0 || len(items) != 0 {
-			t.Fatalf("ListComments after delete = (%d items, %d total, %v)", len(items), total, err)
+		if err != nil || total != 1 || len(items) != 1 || items[0].DeletedAt == nil {
+			t.Fatalf("ListComments after delete = (%d items, %d total, %v), items=%+v", len(items), total, err, items)
 		}
 	})
 

@@ -24,7 +24,10 @@ type Repository interface {
 	ListReady(ctx context.Context, page, pageSize int) ([]Video, int64, error)
 	FindReadyByID(ctx context.Context, id uint64) (*Video, error)
 	ListByUser(ctx context.Context, userID uint64, page, pageSize int) ([]Video, int64, error)
+	ListPublicByUser(ctx context.Context, userID uint64, page, pageSize int) ([]Video, int64, error)
 	ListPublic(ctx context.Context, query ListQuery) ([]Video, int64, error)
+	ListFollowing(ctx context.Context, userID uint64, page, pageSize int, query ListQuery) ([]Video, int64, error)
+	ListRelated(ctx context.Context, videoID uint64, limit int) ([]Video, error)
 	FindPublicByID(ctx context.Context, id uint64) (*Video, error)
 	ViewerState(ctx context.Context, viewerID, videoID, authorID uint64) (*ViewerState, error)
 	UpdateOwned(ctx context.Context, userID, videoID uint64, patch VideoPatch) error
@@ -59,6 +62,9 @@ func NewRepository(db *gorm.DB, options ...RepositoryOption) Repository {
 }
 
 func (r *gormRepository) Create(ctx context.Context, v *Video) error {
+	if v.CategoryID == 0 {
+		v.CategoryID = 1
+	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(v).Error; err != nil {
 			return fmt.Errorf("create video: %w", err)
@@ -222,6 +228,31 @@ func (r *gormRepository) ListByUser(ctx context.Context, userID uint64, page, pa
 	return r.listWithAuthor(ctx, page, pageSize, "v.user_id = ? AND v.status <> ?", userID, StatusDeleted)
 }
 
+// ListPublicByUser applies the same ready/public/normal-author filters as the
+// discovery endpoint before pagination, so private, processing and deleted
+// works never affect a public creator page's count or result set.
+func (r *gormRepository) ListPublicByUser(ctx context.Context, userID uint64, page, pageSize int) ([]Video, int64, error) {
+	query := ListQuery{Page: page, PageSize: pageSize, Sort: SortLatest}
+	countQuery := applyPublicFilters(r.db.WithContext(ctx).
+		Table("videos AS v").
+		Joins("JOIN users AS u ON u.id = v.user_id"), query).
+		Where("v.user_id = ?", userID)
+	var total int64
+	if err := countQuery.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count public creator videos: %w", err)
+	}
+	rows := make([]videoWithAuthorRow, 0, pageSize)
+	if err := applyPublicFilters(r.withAuthorAndStats(ctx), query).
+		Where("v.user_id = ?", userID).
+		Order(publicOrderClause(query.Sort)).
+		Offset((page - 1) * pageSize).
+		Limit(pageSize).
+		Scan(&rows).Error; err != nil {
+		return nil, 0, fmt.Errorf("list public creator videos: %w", err)
+	}
+	return rowsToVideos(rows), total, nil
+}
+
 func (r *gormRepository) listWithAuthor(ctx context.Context, page, pageSize int, where string, args ...any) ([]Video, int64, error) {
 	var total int64
 	count := r.db.WithContext(ctx).Table("videos AS v").Where(where, args...).Count(&total)
@@ -247,8 +278,8 @@ func (r *gormRepository) listWithAuthor(ctx context.Context, page, pageSize int,
 	return videos, total, nil
 }
 
-const videoAuthorColumns = `v.id, v.user_id, v.title, v.description, v.object_key, v.status,
-	v.visibility, v.published_at,
+const videoAuthorColumns = `v.id, v.user_id, v.category_id, v.title, v.description, v.object_key, v.status,
+	v.visibility, v.moderation_status, v.published_at,
 	v.file_size, v.content_type, v.hls_master_key, v.cover_object_key,
 	v.duration_ms, v.width, v.height, v.processing_progress, v.processing_error,
 	v.processed_at, v.created_at, v.updated_at,
@@ -279,8 +310,16 @@ func (r *gormRepository) withAuthorAndStats(ctx context.Context) *gorm.DB {
 // public. Search patterns are bound as parameters and escaped with `!`, so
 // user input cannot change the shape of the statement.
 func applyPublicFilters(db *gorm.DB, query ListQuery) *gorm.DB {
-	db = db.Where("v.status = ? AND v.visibility = ? AND u.status = ?",
-		StatusReady, VisibilityPublic, user.StatusNormal)
+	db = db.Where("v.status = ? AND v.visibility = ? AND v.moderation_status = ? AND u.status = ?",
+		StatusReady, VisibilityPublic, "visible", user.StatusNormal)
+	if query.CategoryID != 0 {
+		db = db.Where("v.category_id = ?", query.CategoryID)
+	}
+	if len(query.Tags) > 0 {
+		db = db.Where(`(SELECT COUNT(DISTINCT tf.normalized_name)
+		FROM video_tags vtf JOIN tags tf ON tf.id = vtf.tag_id
+		WHERE vtf.video_id = v.id AND tf.normalized_name IN ?) = ?`, query.Tags, len(query.Tags))
+	}
 	if query.Query == "" {
 		return db
 	}
@@ -319,11 +358,41 @@ func (r *gormRepository) ListPublic(ctx context.Context, query ListQuery) ([]Vid
 	return rowsToVideos(rows), total, nil
 }
 
+func (r *gormRepository) ListFollowing(ctx context.Context, userID uint64, page, pageSize int, query ListQuery) ([]Video, int64, error) {
+	base := applyPublicFilters(r.db.WithContext(ctx).Table("videos AS v").Joins("JOIN users AS u ON u.id = v.user_id").Joins("JOIN user_follows AS uf ON uf.followee_id = v.user_id AND uf.follower_id = ?", userID), query)
+	var total int64
+	if err := base.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count following videos: %w", err)
+	}
+	rows := make([]videoWithAuthorRow, 0, pageSize)
+	queryDB := applyPublicFilters(r.withAuthorAndStats(ctx).Joins("JOIN user_follows AS uf ON uf.followee_id = v.user_id AND uf.follower_id = ?", userID), query)
+	if err := queryDB.Order(publicOrderClause(query.Sort)).Offset((page - 1) * pageSize).Limit(pageSize).Scan(&rows).Error; err != nil {
+		return nil, 0, fmt.Errorf("list following videos: %w", err)
+	}
+	return rowsToVideos(rows), total, nil
+}
+
+func (r *gormRepository) ListRelated(ctx context.Context, videoID uint64, limit int) ([]Video, error) {
+	if limit < 1 || limit > 6 {
+		limit = 6
+	}
+	rows := make([]videoWithAuthorRow, 0, limit)
+	query := applyPublicFilters(r.withAuthorAndStats(ctx), ListQuery{Sort: SortLatest})
+	query = query.Where("v.id <> ?", videoID)
+	query = query.Select(videoAuthorColumns+videoStatsColumns+`,
+		CASE WHEN v.category_id = (SELECT category_id FROM videos WHERE id = ?) THEN 1 ELSE 0 END AS same_category,
+		(SELECT COUNT(*) FROM video_tags candidate_tags JOIN video_tags source_tags ON source_tags.tag_id = candidate_tags.tag_id WHERE candidate_tags.video_id = v.id AND source_tags.video_id = ?) AS common_tags`, videoID, videoID)
+	if err := query.Order("same_category DESC, common_tags DESC, COALESCE(s.view_count, 0) DESC, COALESCE(s.like_count, 0) DESC, COALESCE(v.published_at, v.created_at) DESC, v.id DESC").Limit(limit).Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("list related videos: %w", err)
+	}
+	return rowsToVideos(rows), nil
+}
+
 func (r *gormRepository) FindPublicByID(ctx context.Context, id uint64) (*Video, error) {
 	var row videoWithAuthorRow
 	err := r.withAuthorAndStats(ctx).
-		Where("v.id = ? AND v.status = ? AND v.visibility = ? AND u.status = ?",
-			id, StatusReady, VisibilityPublic, user.StatusNormal).
+		Where("v.id = ? AND v.status = ? AND v.visibility = ? AND v.moderation_status = ? AND u.status = ?",
+			id, StatusReady, VisibilityPublic, "visible", user.StatusNormal).
 		Take(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrNotFound
@@ -377,6 +446,9 @@ func (r *gormRepository) UpdateOwned(ctx context.Context, userID, videoID uint64
 			updates["published_at"] = gorm.Expr(
 				"COALESCE(published_at, CASE WHEN status = ? THEN UTC_TIMESTAMP(3) ELSE NULL END)", StatusReady)
 		}
+	}
+	if patch.CategoryID != nil {
+		updates["category_id"] = *patch.CategoryID
 	}
 	result := r.db.WithContext(ctx).Model(&Video{}).
 		Where("id = ? AND user_id = ? AND status <> ?", videoID, userID, StatusDeleted).
@@ -434,11 +506,13 @@ func (r *gormRepository) relationExists(ctx context.Context, table, ownerColumn,
 type videoWithAuthorRow struct {
 	ID                 uint64 `gorm:"column:id"`
 	UserID             uint64 `gorm:"column:user_id"`
+	CategoryID         uint64 `gorm:"column:category_id"`
 	Title              string
 	Description        string
 	ObjectKey          string
 	Status             Status
 	Visibility         Visibility
+	ModerationStatus   string
 	FileSize           int64
 	ContentType        string
 	HLSMasterKey       *string
@@ -465,11 +539,13 @@ func (r videoWithAuthorRow) video() Video {
 	return Video{
 		ID:                 r.ID,
 		UserID:             r.UserID,
+		CategoryID:         r.CategoryID,
 		Title:              r.Title,
 		Description:        r.Description,
 		ObjectKey:          r.ObjectKey,
 		Status:             r.Status,
 		Visibility:         r.Visibility,
+		ModerationStatus:   r.ModerationStatus,
 		FileSize:           r.FileSize,
 		ContentType:        r.ContentType,
 		HLSMasterKey:       r.HLSMasterKey,

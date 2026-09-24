@@ -14,6 +14,7 @@ type mockRepository struct {
 	setFavoriteFn   func(context.Context, uint64, uint64, bool) (*RelationState, error)
 	createCommentFn func(context.Context, uint64, uint64, string) (*Comment, error)
 	listCommentsFn  func(context.Context, uint64, int, int) ([]Comment, int64, error)
+	listRepliesFn   func(context.Context, uint64, int, int) ([]Comment, int64, error)
 	deleteCommentFn func(context.Context, uint64, uint64) error
 	recordWatchFn   func(context.Context, uint64, uint64, uint64, uint64) error
 	listFavoritesFn func(context.Context, uint64, int, int) ([]video.Video, int64, error)
@@ -46,6 +47,13 @@ func (m *mockRepository) ListComments(ctx context.Context, videoID uint64, page,
 		return nil, 0, nil
 	}
 	return m.listCommentsFn(ctx, videoID, page, pageSize)
+}
+
+func (m *mockRepository) ListReplies(ctx context.Context, commentID uint64, page, pageSize int) ([]Comment, int64, error) {
+	if m.listRepliesFn == nil {
+		return nil, 0, nil
+	}
+	return m.listRepliesFn(ctx, commentID, page, pageSize)
 }
 
 func (m *mockRepository) DeleteComment(ctx context.Context, userID, commentID uint64) error {

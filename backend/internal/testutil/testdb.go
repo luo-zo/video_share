@@ -24,6 +24,9 @@ func MySQLDSN(t *testing.T) string {
 
 	base := os.Getenv("TEST_MYSQL_DSN")
 	if base == "" {
+		if isTruthy(os.Getenv("REQUIRE_INTEGRATION_TESTS")) {
+			t.Fatal("TEST_MYSQL_DSN must be set when REQUIRE_INTEGRATION_TESTS=true")
+		}
 		t.Skip("TEST_MYSQL_DSN not set; skipping integration test")
 	}
 

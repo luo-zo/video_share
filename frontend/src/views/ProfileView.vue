@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { communityClient, videoClient } from '../api';
 import type { FollowedUser } from '../api/community';
 import type { VideoItem } from '../api/video';
+import CreatorCard from '../components/CreatorCard.vue';
 import VideoCard from '../components/VideoCard.vue';
 import { useAuthStore } from '../stores/auth';
 
@@ -85,7 +86,7 @@ onUnmounted(() => activeRequest?.abort());
       <p v-if="error" class="app-message" data-kind="error" role="alert">{{ error }}</p>
       <div v-if="loading" class="empty-state"><p>正在整理你的片段…</p></div>
       <div v-else-if="tab !== 'follows'" class="video-grid"><VideoCard v-for="video in videos" :key="video.id" :video="video" :owner="tab === 'videos'" /><div v-if="!videos.length" class="empty-state"><div><span class="empty-mark">🐾</span><strong>这里还是空的</strong><p>{{ tab === 'videos' ? '投稿后会出现在这里。' : tab === 'favorites' ? '收藏的视频会出现在这里。' : '观看历史会出现在这里。' }}</p></div></div></div>
-      <ul v-else class="profile-grid"><li v-for="person in people" :key="person.id" class="profile-grid-item"><article class="user-card"><strong class="user-card-name">{{ person.nickname || person.username || '未命名用户' }}</strong><span class="user-card-handle">@{{ person.username || person.id }}</span></article></li><li v-if="!people.length" class="empty-state"><div><span class="empty-mark">🐾</span><strong>还没有关注</strong><p>关注的创作者会出现在这里。</p></div></li></ul>
+      <ul v-else class="profile-grid"><li v-for="person in people" :key="person.id" class="profile-grid-item"><CreatorCard :creator="person" /></li><li v-if="!people.length" class="empty-state"><div><span class="empty-mark">🐾</span><strong>还没有关注</strong><p>关注的创作者会出现在这里。</p></div></li></ul>
       <nav class="pagination" aria-label="个人中心分页"><button type="button" :disabled="loading || page <= 1" @click="changePage(page - 1)">上一页</button><span>{{ page }} / {{ totalPages }}</span><button type="button" :disabled="loading || page >= totalPages" @click="changePage(page + 1)">下一页</button></nav>
     </section>
   </div>

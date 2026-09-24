@@ -34,13 +34,16 @@ type Favorite struct {
 func (Favorite) TableName() string { return "video_favorites" }
 
 type Comment struct {
-	ID        uint64     `gorm:"primaryKey;autoIncrement"`
-	VideoID   uint64     `gorm:"not null;index"`
-	UserID    uint64     `gorm:"not null;index"`
-	Content   string     `gorm:"type:varchar(500);not null"`
-	CreatedAt time.Time  `gorm:"not null"`
-	UpdatedAt time.Time  `gorm:"not null"`
-	DeletedAt *time.Time `gorm:"type:datetime(3);index"`
+	ID               uint64     `gorm:"primaryKey;autoIncrement"`
+	VideoID          uint64     `gorm:"not null;index"`
+	UserID           uint64     `gorm:"not null;index"`
+	ParentID         *uint64    `gorm:"index"`
+	RootID           *uint64    `gorm:"index"`
+	Content          string     `gorm:"type:varchar(500);not null"`
+	CreatedAt        time.Time  `gorm:"not null"`
+	UpdatedAt        time.Time  `gorm:"not null"`
+	DeletedAt        *time.Time `gorm:"type:datetime(3);index"`
+	ModerationStatus string     `gorm:"type:varchar(16);not null;default:visible;index"`
 
 	Author video.Author `gorm:"-"`
 }

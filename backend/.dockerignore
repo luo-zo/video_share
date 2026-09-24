@@ -1,7 +1,10 @@
 .git
 .env
+.env.*
+!.env.example
 .tmp
 bin
 *.exe
 *.test
 coverage.*
+test-results

@@ -2,25 +2,31 @@ package engagement
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"video_share/internal/analytics"
+	"video_share/internal/notification"
 	"video_share/internal/user"
 	"video_share/internal/video"
 )
 
 var (
-	ErrVideoNotFound     = errors.New("video not found")
-	ErrUnauthorized      = errors.New("unauthorized")
-	ErrContentInvalid    = errors.New("invalid comment content")
-	ErrCommentNotFound   = errors.New("comment not found")
-	ErrCommentForbidden  = errors.New("comment belongs to another user")
-	ErrProgressInvalid   = errors.New("invalid watch progress")
-	ErrPaginationInvalid = errors.New("invalid pagination")
+	ErrVideoNotFound        = errors.New("video not found")
+	ErrUnauthorized         = errors.New("unauthorized")
+	ErrContentInvalid       = errors.New("invalid comment content")
+	ErrCommentNotFound      = errors.New("comment not found")
+	ErrCommentForbidden     = errors.New("comment belongs to another user")
+	ErrParentCommentInvalid = errors.New("invalid parent comment")
+	ErrIdempotencyConflict  = notification.ErrReceiptConflict
+	ErrProgressInvalid      = errors.New("invalid watch progress")
+	ErrPaginationInvalid    = errors.New("invalid pagination")
 )
 
 const (
@@ -38,6 +44,7 @@ type Repository interface {
 
 	CreateComment(ctx context.Context, userID, videoID uint64, content string) (*Comment, error)
 	ListComments(ctx context.Context, videoID uint64, page, pageSize int) ([]Comment, int64, error)
+	ListReplies(ctx context.Context, commentID uint64, page, pageSize int) ([]Comment, int64, error)
 	DeleteComment(ctx context.Context, userID, commentID uint64) error
 
 	RecordWatch(ctx context.Context, userID, videoID, progressMS, durationMS uint64) error
@@ -77,6 +84,17 @@ func (r *gormRepository) mutate(ctx context.Context, userID, videoID uint64, act
 			if err := applyCounter(tx, videoID, counter, active); err != nil {
 				return err
 			}
+			metric := "net_likes"
+			if counter == counterFavorites {
+				metric = "net_favorites"
+			}
+			delta := int64(1)
+			if !active {
+				delta = -1
+			}
+			if err := analytics.RecordVideoDeltaTx(tx, videoID, metric, delta, time.Now().UTC()); err != nil {
+				return err
+			}
 		}
 		state, err = readRelationState(tx, record, userID, videoID, counter)
 		return err
@@ -92,8 +110,8 @@ func ensureEngageableVideo(tx *gorm.DB, videoID uint64) error {
 	var count int64
 	if err := tx.Table("videos AS v").
 		Joins("JOIN users AS u ON u.id = v.user_id").
-		Where("v.id = ? AND v.status = ? AND v.visibility = ? AND u.status = ?",
-			videoID, video.StatusReady, video.VisibilityPublic, user.StatusNormal).
+		Where("v.id = ? AND v.status = ? AND v.visibility = ? AND v.moderation_status = ? AND u.status = ?",
+			videoID, video.StatusReady, video.VisibilityPublic, "visible", user.StatusNormal).
 		Count(&count).Error; err != nil {
 		return fmt.Errorf("check engageable video: %w", err)
 	}
@@ -179,19 +197,102 @@ func readRelationState(tx *gorm.DB, record any, userID, videoID uint64, counter 
 }
 
 func (r *gormRepository) CreateComment(ctx context.Context, userID, videoID uint64, content string) (*Comment, error) {
+	return r.createComment(ctx, userID, videoID, content, nil, "")
+}
+
+// CreateCommentWithRequest extends the original write with one-level reply and
+// idempotency semantics. It is intentionally an additional method so old
+// Repository test doubles and callers remain source-compatible.
+func (r *gormRepository) CreateCommentWithRequest(ctx context.Context, userID, videoID uint64, content string, parentID *uint64, requestID string) (*Comment, error) {
+	return r.createComment(ctx, userID, videoID, content, parentID, requestID)
+}
+
+func (r *gormRepository) createComment(ctx context.Context, userID, videoID uint64, content string, parentID *uint64, requestID string) (*Comment, error) {
 	// 落库前再次裁剪：仓储是写入边界，任何调用方传进来的首尾空白都不应被持久化。
-	created := Comment{VideoID: videoID, UserID: userID, Content: strings.TrimSpace(content)}
+	trimmed := strings.TrimSpace(content)
+	hashPayload, _ := json.Marshal(struct {
+		Content  string  `json:"content"`
+		ParentID *uint64 `json:"parent_id"`
+	}{trimmed, parentID})
+	requestHash := notification.RequestHash(string(hashPayload))
+	created := Comment{VideoID: videoID, UserID: userID, ParentID: parentID, Content: trimmed}
+	duplicate := false
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := ensureEngageableVideo(tx, videoID); err != nil {
 			return err
 		}
+		if receipt, err := notification.ExistingReceipt(tx, userID, "comment.create", requestID, requestHash); err != nil {
+			return err
+		} else if receipt != nil && receipt.ResourceID != nil {
+			duplicate = true
+			return tx.Where("id = ?", *receipt.ResourceID).Take(&created).Error
+		}
+		if parentID != nil {
+			var parent Comment
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND video_id = ?", *parentID, videoID).Take(&parent).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrParentCommentInvalid
+			} else if err != nil {
+				return fmt.Errorf("load parent comment: %w", err)
+			} else if parent.DeletedAt != nil || (parent.ModerationStatus != "" && parent.ModerationStatus != "visible") {
+				return ErrParentCommentInvalid
+			} else if parent.RootID != nil {
+				created.RootID = parent.RootID
+			} else {
+				created.RootID = &parent.ID
+			}
+		} else {
+			// The root ID is the auto-increment ID, so it is filled immediately
+			// after insertion below.
+		}
 		if err := tx.Create(&created).Error; err != nil {
 			return fmt.Errorf("create comment: %w", err)
 		}
-		return bumpCounter(tx, videoID, counterComments)
+		if created.RootID == nil {
+			created.RootID = &created.ID
+			if err := tx.Model(&Comment{}).Where("id = ?", created.ID).Update("root_id", created.ID).Error; err != nil {
+				return fmt.Errorf("set comment root: %w", err)
+			}
+		}
+		if err := bumpCounter(tx, videoID, counterComments); err != nil {
+			return err
+		}
+		if err := analytics.RecordVideoDeltaTx(tx, videoID, "net_comments", 1, time.Now().UTC()); err != nil {
+			return err
+		}
+		var ownerID uint64
+		if err := tx.Table("videos").Where("id = ?", videoID).Pluck("user_id", &ownerID).Error; err != nil {
+			return fmt.Errorf("load video owner: %w", err)
+		}
+		actorID := userID
+		if parentID == nil {
+			if err := notification.Emit(tx, notification.Event{RecipientID: ownerID, ActorID: &actorID, EventKey: fmt.Sprintf("comment:%d:author", created.ID), Type: "comment", VideoID: &videoID, CommentID: &created.ID}); err != nil {
+				return err
+			}
+		} else {
+			var parent Comment
+			if err := tx.Select("user_id").Where("id = ?", *parentID).Take(&parent).Error; err != nil {
+				return fmt.Errorf("reload parent author: %w", err)
+			}
+			if err := notification.Emit(tx, notification.Event{RecipientID: parent.UserID, ActorID: &actorID, EventKey: fmt.Sprintf("comment:%d:reply:%d", created.ID, parent.UserID), Type: "reply", VideoID: &videoID, CommentID: &created.ID}); err != nil {
+				return err
+			}
+			if ownerID != parent.UserID {
+				if err := notification.Emit(tx, notification.Event{RecipientID: ownerID, ActorID: &actorID, EventKey: fmt.Sprintf("comment:%d:author", created.ID), Type: "reply", VideoID: &videoID, CommentID: &created.ID}); err != nil {
+					return err
+				}
+			}
+		}
+		if err := notification.SaveReceipt(tx, userID, "comment.create", requestID, requestHash, &created.ID); err != nil {
+			return err
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	if duplicate || err == nil {
+		// Duplicate requests return the original row and must not increment
+		// counters or emit a second notification.
 	}
 	if err := r.loadCommentAuthor(ctx, &created); err != nil {
 		return nil, err
@@ -205,7 +306,7 @@ func (r *gormRepository) ListComments(ctx context.Context, videoID uint64, page,
 	}
 	var total int64
 	if err := r.db.WithContext(ctx).Model(&Comment{}).
-		Where("video_id = ? AND deleted_at IS NULL", videoID).Count(&total).Error; err != nil {
+		Where("video_id = ? AND parent_id IS NULL AND moderation_status = ?", videoID, "visible").Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("count comments: %w", err)
 	}
 
@@ -213,7 +314,7 @@ func (r *gormRepository) ListComments(ctx context.Context, videoID uint64, page,
 	err := r.db.WithContext(ctx).Table("comments AS c").
 		Select(commentAuthorColumns).
 		Joins("JOIN users AS u ON u.id = c.user_id").
-		Where("c.video_id = ? AND c.deleted_at IS NULL", videoID).
+		Where("c.video_id = ? AND c.parent_id IS NULL AND c.moderation_status = ?", videoID, "visible").
 		Order("c.created_at DESC, c.id DESC").
 		Offset((page - 1) * pageSize).
 		Limit(pageSize).
@@ -227,6 +328,37 @@ func (r *gormRepository) ListComments(ctx context.Context, videoID uint64, page,
 		comments = append(comments, rows[i].comment())
 	}
 	return comments, total, nil
+}
+
+func (r *gormRepository) ListReplies(ctx context.Context, commentID uint64, page, pageSize int) ([]Comment, int64, error) {
+	var parent Comment
+	if err := r.db.WithContext(ctx).Where("id = ?", commentID).Take(&parent).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, 0, ErrCommentNotFound
+	} else if err != nil {
+		return nil, 0, fmt.Errorf("load reply root: %w", err)
+	}
+	if parent.ModerationStatus == "hidden" {
+		return nil, 0, ErrCommentNotFound
+	}
+	if err := ensureEngageableVideo(r.db.WithContext(ctx), parent.VideoID); err != nil {
+		return nil, 0, err
+	}
+	var total int64
+	if err := r.db.WithContext(ctx).Model(&Comment{}).Where("root_id = ? AND parent_id IS NOT NULL AND moderation_status = ?", commentID, "visible").Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count replies: %w", err)
+	}
+	rows := make([]commentWithAuthorRow, 0, pageSize)
+	if err := r.db.WithContext(ctx).Table("comments AS c").Select(commentAuthorColumns).
+		Joins("JOIN users AS u ON u.id = c.user_id").
+		Where("c.root_id = ? AND c.parent_id IS NOT NULL AND c.moderation_status = ?", commentID, "visible").
+		Order("c.created_at ASC, c.id ASC").Offset((page - 1) * pageSize).Limit(pageSize).Scan(&rows).Error; err != nil {
+		return nil, 0, fmt.Errorf("list replies: %w", err)
+	}
+	items := make([]Comment, 0, len(rows))
+	for i := range rows {
+		items = append(items, rows[i].comment())
+	}
+	return items, total, nil
 }
 
 func (r *gormRepository) DeleteComment(ctx context.Context, userID, commentID uint64) error {
@@ -251,7 +383,10 @@ func (r *gormRepository) DeleteComment(ctx context.Context, userID, commentID ui
 		if result.RowsAffected == 0 {
 			return ErrCommentNotFound
 		}
-		return dropCounter(tx, comment.VideoID, counterComments)
+		if err := dropCounter(tx, comment.VideoID, counterComments); err != nil {
+			return err
+		}
+		return analytics.RecordVideoDeltaTx(tx, comment.VideoID, "net_comments", -1, time.Now().UTC())
 	})
 }
 
@@ -310,8 +445,8 @@ func (r *gormRepository) listPersonal(ctx context.Context, userID uint64, page, 
 			Joins(join, userID).
 			Joins("JOIN users AS u ON u.id = v.user_id").
 			Joins("LEFT JOIN video_stats AS s ON s.video_id = v.id").
-			Where("v.status = ? AND v.visibility = ? AND u.status = ?",
-				video.StatusReady, video.VisibilityPublic, user.StatusNormal)
+			Where("v.status = ? AND v.visibility = ? AND v.moderation_status = ? AND u.status = ?",
+				video.StatusReady, video.VisibilityPublic, "visible", user.StatusNormal)
 	}
 
 	var total int64
@@ -351,7 +486,7 @@ func (r *gormRepository) loadCommentAuthor(ctx context.Context, c *Comment) erro
 	return nil
 }
 
-const commentAuthorColumns = `c.id, c.video_id, c.user_id, c.content, c.created_at, c.updated_at,
+const commentAuthorColumns = `c.id, c.video_id, c.user_id, c.parent_id, c.root_id, c.content, c.deleted_at, c.moderation_status, c.created_at, c.updated_at,
 	u.id AS author_id, u.username AS author_username, u.nickname AS author_nickname`
 
 type commentWithAuthorRow struct {

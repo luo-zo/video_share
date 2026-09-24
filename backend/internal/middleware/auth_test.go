@@ -28,6 +28,15 @@ func setupAuthRouterWithValidator(tm *token.Manager, validate UserValidator) *gi
 	return r
 }
 
+func setupAuthRouterWithSessionValidator(tm *token.Manager, validate SessionValidator) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/protected", AuthWithSession(tm, func(context.Context, uint64) (bool, error) { return true, nil }, validate), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"uid": c.GetUint64(UserIDKey)})
+	})
+	return r
+}
+
 func TestAuthMissingHeader(t *testing.T) {
 	tm := token.NewManager("secret", "video-share", time.Hour)
 	w := httptest.NewRecorder()
@@ -66,6 +75,31 @@ func TestAuthValidToken(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), `"uid":99`) {
 		t.Fatalf("body = %s", w.Body.String())
+	}
+}
+
+func TestAuthWithSessionRejectsLegacyAndRevokedSID(t *testing.T) {
+	tm := token.NewManager("secret", "video-share", time.Hour)
+	valid, _, _ := tm.GenerateWithSession(99, "family-1")
+	legacy, _, _ := tm.Generate(99)
+	validateSession := func(_ context.Context, userID uint64, sid string) (bool, error) {
+		return userID == 99 && sid == "family-1", nil
+	}
+	r := setupAuthRouterWithSessionValidator(tm, validateSession)
+	for name, value := range map[string]string{"valid": valid, "legacy": legacy} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+			req.Header.Set("Authorization", "Bearer "+value)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			want := http.StatusOK
+			if name == "legacy" {
+				want = http.StatusUnauthorized
+			}
+			if w.Code != want {
+				t.Fatalf("status = %d, want %d; body=%s", w.Code, want, w.Body.String())
+			}
+		})
 	}
 }
 

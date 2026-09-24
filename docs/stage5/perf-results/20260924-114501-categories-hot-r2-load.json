@@ -1,0 +1,140 @@
+{
+    "root_group": {
+        "groups": {},
+        "checks": {
+                "categories returns HTTP 200": {
+                    "name": "categories returns HTTP 200",
+                    "path": "::categories returns HTTP 200",
+                    "id": "743026e9c64c3459e300139fa3b5acc8",
+                    "passes": 710,
+                    "fails": 0
+                },
+                "categories envelope contains enabled items": {
+                    "path": "::categories envelope contains enabled items",
+                    "id": "b622532405a972f6737a92fdd8f9faae",
+                    "passes": 710,
+                    "fails": 0,
+                    "name": "categories envelope contains enabled items"
+                }
+            },
+        "name": "",
+        "path": "",
+        "id": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    "metrics": {
+        "data_received": {
+            "count": 794490,
+            "rate": 52790.04988741043
+        },
+        "http_req_connecting": {
+            "p(95)": 0,
+            "avg": 0.018269452112676058,
+            "min": 0,
+            "med": 0,
+            "max": 3.297031,
+            "p(90)": 0
+        },
+        "vus": {
+            "value": 5,
+            "min": 5,
+            "max": 5
+        },
+        "vus_max": {
+            "max": 5,
+            "value": 5,
+            "min": 5
+        },
+        "http_req_duration": {
+            "avg": 4.952642236619719,
+            "min": 2.838389,
+            "med": 4.6945365,
+            "max": 14.774951,
+            "p(90)": 6.356231400000001,
+            "p(95)": 7.234785049999999
+        },
+        "http_req_waiting": {
+            "p(95)": 7.160949599999999,
+            "avg": 4.845892647887325,
+            "min": 2.690183,
+            "med": 4.584113,
+            "max": 14.678233,
+            "p(90)": 6.125403500000001
+        },
+        "checks": {
+            "passes": 1420,
+            "fails": 0,
+            "thresholds": {
+                "rate==1": false
+            },
+            "value": 1
+        },
+        "http_req_failed": {
+            "passes": 0,
+            "fails": 710,
+            "thresholds": {
+                "rate==0": false
+            },
+            "value": 0
+        },
+        "http_req_duration{expected_response:true}": {
+            "max": 14.774951,
+            "p(90)": 6.356231400000001,
+            "p(95)": 7.234785049999999,
+            "avg": 4.952642236619719,
+            "min": 2.838389,
+            "med": 4.6945365
+        },
+        "http_req_receiving": {
+            "med": 0.056284,
+            "max": 0.977086,
+            "p(90)": 0.1364551,
+            "p(95)": 0.19259424999999972,
+            "avg": 0.0796278338028169,
+            "min": 0.014558
+        },
+        "http_reqs": {
+            "count": 710,
+            "rate": 47.17609462681897
+        },
+        "http_req_tls_handshaking": {
+            "med": 0,
+            "max": 0,
+            "p(90)": 0,
+            "p(95)": 0,
+            "avg": 0,
+            "min": 0
+        },
+        "iteration_duration": {
+            "avg": 105.9632974521127,
+            "min": 103.690016,
+            "med": 105.6440795,
+            "max": 115.663312,
+            "p(90)": 107.6209656,
+            "p(95)": 108.65075644999999
+        },
+        "http_req_blocked": {
+            "avg": 0.04455162535211273,
+            "min": 0.002064,
+            "med": 0.006813,
+            "max": 6.020055,
+            "p(90)": 0.012425000000000002,
+            "p(95)": 0.015020499999999985
+        },
+        "http_req_sending": {
+            "med": 0.01797,
+            "max": 0.716794,
+            "p(90)": 0.041322000000000005,
+            "p(95)": 0.05923404999999997,
+            "avg": 0.02712175492957745,
+            "min": 0.00483
+        },
+        "iterations": {
+            "count": 710,
+            "rate": 47.17609462681897
+        },
+        "data_sent": {
+            "rate": 4670.433368055078,
+            "count": 70290
+        }
+    }
+}

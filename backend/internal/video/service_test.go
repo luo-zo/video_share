@@ -24,6 +24,8 @@ type mockRepository struct {
 	listReadyFn       func(context.Context, int, int) ([]Video, int64, error)
 	findReadyByIDFn   func(context.Context, uint64) (*Video, error)
 	listPublicFn      func(context.Context, ListQuery) ([]Video, int64, error)
+	listFollowingFn   func(context.Context, uint64, int, int, ListQuery) ([]Video, int64, error)
+	listRelatedFn     func(context.Context, uint64, int) ([]Video, error)
 	findPublicByIDFn  func(context.Context, uint64) (*Video, error)
 	viewerStateFn     func(context.Context, uint64, uint64, uint64) (*ViewerState, error)
 	listByUserFn      func(context.Context, uint64, int, int) ([]Video, int64, error)
@@ -101,6 +103,27 @@ func (m *mockRepository) ListByUser(ctx context.Context, userID uint64, page, pa
 		return []Video{}, 0, nil
 	}
 	return m.listByUserFn(ctx, userID, page, pageSize)
+}
+
+func (m *mockRepository) ListPublicByUser(ctx context.Context, userID uint64, page, pageSize int) ([]Video, int64, error) {
+	if m.listByUserFn != nil {
+		return m.listByUserFn(ctx, userID, page, pageSize)
+	}
+	return []Video{}, 0, nil
+}
+
+func (m *mockRepository) ListFollowing(ctx context.Context, userID uint64, page, pageSize int, query ListQuery) ([]Video, int64, error) {
+	if m.listFollowingFn == nil {
+		return []Video{}, 0, nil
+	}
+	return m.listFollowingFn(ctx, userID, page, pageSize, query)
+}
+
+func (m *mockRepository) ListRelated(ctx context.Context, videoID uint64, limit int) ([]Video, error) {
+	if m.listRelatedFn == nil {
+		return []Video{}, nil
+	}
+	return m.listRelatedFn(ctx, videoID, limit)
 }
 
 type mockObjectStore struct {

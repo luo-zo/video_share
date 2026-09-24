@@ -7,6 +7,7 @@
 # 上传并转码一支短视频，结束时删除该视频。它永远不会读写已有用户的投稿。
 param(
     [string]$BaseUrl = "http://127.0.0.1:8081",
+    [string]$AppOrigin = "http://127.0.0.1:5173",
     [int]$TimeoutSeconds = 180
 )
 
@@ -42,11 +43,25 @@ function Invoke-Api {
         [string]$Method,
         [string]$Path,
         [hashtable]$Headers,
+        [Microsoft.PowerShell.Commands.WebRequestSession]$Session,
         $Body,
         [int[]]$ExpectStatus = @(200)
     )
     $params = @{ Method = $Method; Uri = (Resolve-ApiUrl $Path); UseBasicParsing = $true }
-    if ($Headers) { $params.Headers = $Headers }
+    $httpHeaders = @{ Origin = $script:AppOrigin }
+    $webSession = $Session
+    if ($Headers) {
+        foreach ($key in $Headers.Keys) {
+            if ($key -eq "__webSession") { $webSession = $Headers[$key] }
+            else { $httpHeaders[$key] = $Headers[$key] }
+        }
+    }
+    if ($null -ne $webSession) {
+        $params.WebSession = $webSession
+        $csrf = $webSession.Cookies.GetCookies([Uri]$script:BaseUrl) | Where-Object { $_.Name -eq "video_share_csrf" } | Select-Object -First 1
+        if ($null -ne $csrf -and -not [string]::IsNullOrWhiteSpace($csrf.Value)) { $httpHeaders["X-CSRF-Token"] = $csrf.Value }
+    }
+    $params.Headers = $httpHeaders
     if ($null -ne $Body) {
         # 必须显式声明 charset：PS 5.1 默认按本地代码页编码字符串请求体，
         # 中文标题会被发成 '?'。5.1 与 7 都按 UTF-8 正确编码。
@@ -100,10 +115,12 @@ function New-TestUser([string]$Prefix, [string]$Nickname) {
     Invoke-Api -Method Post -Path "/api/v1/auth/register" -ExpectStatus 201 -Body @{
         username = $username; password = $password; nickname = $Nickname
     } | Out-Null
-    $login = Invoke-Api -Method Post -Path "/api/v1/auth/login" -Body @{ username = $username; password = $password }
+    $webSession = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+    Invoke-Api -Method Get -Path "/api/v1/auth/csrf" -Session $webSession | Out-Null
+    $login = Invoke-Api -Method Post -Path "/api/v1/auth/login" -Session $webSession -Body @{ username = $username; password = $password }
     $token = $login.data.data.access_token
     Assert-True ($token -is [string] -and $token.Length -gt 0) "login returns access_token"
-    $headers = @{ Authorization = "Bearer $token" }
+    $headers = @{ Authorization = "Bearer $token"; __webSession = $webSession }
     $me = Invoke-Api -Method Get -Path "/api/v1/users/me" -Headers $headers
     return @{ username = $username; id = [uint64]$me.data.data.id; headers = $headers }
 }
@@ -235,13 +252,13 @@ try {
     Invoke-Api -Method Post -Path "/api/v1/videos/$($video.id)/watch" -Headers $viewer.headers -ExpectStatus 400 -Body @{ progress_ms = 2000; duration_ms = 1000 } | Out-Null
 
     Write-Host "[8/11] 验证关注、自关注拒绝与关注列表..."
-    $follow = Invoke-Api -Method Put -Path "/api/v1/users/$($author.id)/follow" -Headers $viewer.headers
+    $follow = Invoke-Api -Method Put -Path "/api/v1/users/$($author.id)/follow" -Headers $viewer.headers -Body @{}
     Assert-Equal $follow.data.data.following $true "关注后 following 应为 true"
-    $followAgain = Invoke-Api -Method Put -Path "/api/v1/users/$($author.id)/follow" -Headers $viewer.headers
+    $followAgain = Invoke-Api -Method Put -Path "/api/v1/users/$($author.id)/follow" -Headers $viewer.headers -Body @{}
     Assert-Equal $followAgain.data.data.following $true "重复关注应为幂等"
     $follows = Invoke-Api -Method Get -Path "/api/v1/users/me/follows" -Headers $viewer.headers
     Assert-True (@($follows.data.data.items | Where-Object { [uint64]$_.id -eq $author.id }).Count -eq 1) "关注列表应包含作者"
-    $self = Invoke-Api -Method Put -Path "/api/v1/users/$($viewer.id)/follow" -Headers $viewer.headers -ExpectStatus 400
+    $self = Invoke-Api -Method Put -Path "/api/v1/users/$($viewer.id)/follow" -Headers $viewer.headers -ExpectStatus 400 -Body @{}
     Assert-Equal $self.data.error.code "SELF_FOLLOW" "自关注应返回 SELF_FOLLOW"
 
     Write-Host "[9/11] 验证带令牌的详情返回 viewer_state 与最终计数..."
@@ -282,7 +299,9 @@ try {
     Assert-Equal ([uint64]$unfavorite.data.data.count) 0 "取消收藏后计数应归零"
     Invoke-Api -Method Delete -Path "/api/v1/comments/$commentID" -Headers $viewer.headers | Out-Null
     $afterDeleteComment = Invoke-Api -Method Get -Path "/api/v1/videos/$($video.id)/comments"
-    Assert-Equal ([int]$afterDeleteComment.data.data.total) 0 "删除评论后总数应为 0"
+    Assert-Equal ([int]$afterDeleteComment.data.data.total) 1 "软删除的根评论应保留为分页占位"
+    Assert-Equal $afterDeleteComment.data.data.items[0].deleted $true "删除后的根评论应标记 deleted"
+    Assert-Equal $afterDeleteComment.data.data.items[0].content "评论已删除" "删除后的根评论应显示占位文案"
     $unfollow = Invoke-Api -Method Delete -Path "/api/v1/users/$($author.id)/follow" -Headers $viewer.headers
     Assert-Equal $unfollow.data.data.following $false "取关后 following 应为 false"
     $final = Invoke-Api -Method Get -Path "/api/v1/videos/$($video.id)"

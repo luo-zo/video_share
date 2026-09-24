@@ -4,8 +4,9 @@ import { onMounted, onUnmounted, ref, watch } from 'vue';
 import type { VideoItem } from '../api/video';
 import { attachVideoSource } from '../lib/player';
 import type { Detach } from '../lib/player';
+import { useWatchSession } from '../composables/useWatchSession';
 
-const props = defineProps<{ video: VideoItem | null }>();
+const props = defineProps<{ video: VideoItem | null; watchSessionEnabled?: boolean }>();
 const emit = defineEmits<{
   error: [message: string];
   progress: [payload: { progressMs: number; durationMs: number; keepalive: boolean }];
@@ -16,8 +17,10 @@ const error = ref('');
 let detach: Detach | null = null;
 let generation = 0;
 let lastReportedMs = 0;
+const watchSession = useWatchSession({ element, enabled: () => Boolean(props.watchSessionEnabled) });
 
 function cleanup(): void {
+  watchSession.stop();
   detach?.();
   detach = null;
 }
@@ -38,7 +41,10 @@ async function attach(video: VideoItem | null): Promise<void> {
         },
       });
       if (current !== generation) attached();
-      else detach = attached;
+      else {
+        detach = attached;
+        if (props.watchSessionEnabled) void watchSession.start(video.id);
+      }
     } catch (caught) {
       if (current !== generation) return;
       error.value = caught instanceof Error ? caught.message : '视频无法播放。';
@@ -47,6 +53,10 @@ async function attach(video: VideoItem | null): Promise<void> {
 }
 
 watch(() => props.video, (video) => void attach(video));
+watch(() => props.watchSessionEnabled, (enabled) => {
+  if (enabled && props.video) void watchSession.start(props.video.id);
+  else watchSession.stop();
+});
 onMounted(() => void attach(props.video));
 
 function report(keepalive = false): void {
@@ -62,6 +72,7 @@ function report(keepalive = false): void {
 onUnmounted(() => {
   generation += 1;
   report(true);
+  watchSession.stop();
   cleanup();
 });
 </script>

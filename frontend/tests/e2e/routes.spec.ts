@@ -27,6 +27,27 @@ test('deep discovery links keep search and pagination through browser history', 
   await expect(page.getByRole('searchbox', { name: '搜索视频' })).toHaveValue('猫');
 });
 
+test('ranking deep link switches between day and week snapshots', async ({ page }) => {
+  await page.route('**/api/v1/videos/ranking?**', async (route) => {
+    const url = new URL(route.request().url());
+    const window = url.searchParams.get('window') === 'week' ? 'week' : 'day';
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ data: {
+        window, generated_at: '2026-09-23T04:00:00Z', page: 1, page_size: 20, total: 1,
+        items: [{ id: 18, video_id: 18, rank: 1, score: 12, title: `${window} 猫片`, status: 'ready', author: { id: 7, nickname: '小黑猫' }, stats: {} }],
+      } }),
+    });
+  });
+
+  await page.goto('/ranking?window=week');
+  await expect(page.getByRole('heading', { name: '热度榜' })).toBeVisible();
+  await expect(page.getByText('week 猫片')).toBeVisible();
+  await page.getByRole('button', { name: '日榜' }).click();
+  await expect(page).toHaveURL(/window=day/);
+  await expect(page.getByText('day 猫片')).toBeVisible();
+});
+
 test('a video detail deep link exposes a shareable page URL', async ({ page, context, baseURL }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.route('**/api/v1/videos/42/comments?**', (route) => route.fulfill({
@@ -47,6 +68,28 @@ test('a video detail deep link exposes a shareable page URL', async ({ page, con
   await page.getByRole('button', { name: '复制页面链接' }).click();
   await expect(page.getByText('页面链接已复制。')).toBeVisible();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(`${baseURL}/video/42`);
+});
+
+test('a public creator deep link shows profile and public videos without login', async ({ page }) => {
+  await page.route('**/api/v1/users/7', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ data: {
+      id: 7, username: 'creator', nickname: '小黑猫', bio: '记录日常。', created_at: '2026-01-01T00:00:00Z',
+      video_count: 1, follower_count: 2, following_count: 1, following: false,
+    } }),
+  }));
+  await page.route('**/api/v1/users/7/videos?**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ data: {
+      items: [{ id: 21, title: '公开猫片', status: 'ready', visibility: 'public', author: { id: 7, username: 'creator', nickname: '小黑猫' }, stats: {} }],
+      page: 1, page_size: 20, total: 1,
+    } }),
+  }));
+
+  await page.goto('/creator/7');
+  await expect(page.getByRole('heading', { name: '小黑猫' })).toBeVisible();
+  await expect(page.getByText('公开猫片')).toBeVisible();
+  await expect(page.getByText('2 粉丝')).toBeVisible();
 });
 
 test('the development server hides project files while serving routes and source assets', async ({ request, baseURL }) => {
@@ -99,6 +142,18 @@ test('an anonymous owner deep link enters login without requesting owner data', 
 });
 
 test('login returns an authenticated owner to the private detail endpoint', async ({ page }) => {
+  // Persistent auth bootstraps through CSRF + refresh before the login form is
+  // shown. Keep this browser-only test deterministic without requiring a live API.
+  await page.route('**/api/v1/auth/csrf', (route) => route.fulfill({
+    headers: { 'set-cookie': 'video_share_csrf=e2e-csrf; Path=/' },
+    contentType: 'application/json',
+    body: JSON.stringify({ data: { csrf_token: 'e2e-csrf' } }),
+  }));
+  await page.route('**/api/v1/auth/refresh', (route) => route.fulfill({
+    status: 401,
+    contentType: 'application/json',
+    body: JSON.stringify({ error: { code: 'SESSION_EXPIRED' } }),
+  }));
   await page.route('**/api/v1/auth/login', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify({ data: { access_token: 'test-token', token_type: 'Bearer', expires_in: 3600 } }),

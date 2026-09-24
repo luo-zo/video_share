@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,7 +22,7 @@ func newRouteTestRouter(t *testing.T) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	tm := token.NewManager("secret", "video-share", time.Hour)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return NewRouter(&config.Config{}, nil, log, tm, nil)
+	return NewRouter(&config.Config{}, nil, log, tm, nil, nil)
 }
 
 func TestCommunityRoutesAreRegistered(t *testing.T) {
@@ -33,7 +34,16 @@ func TestCommunityRoutesAreRegistered(t *testing.T) {
 	}
 
 	want := []string{
+		"GET /api/v1/auth/csrf",
+		"POST /api/v1/auth/login",
+		"POST /api/v1/auth/refresh",
+		"POST /api/v1/auth/logout",
+		"GET /api/v1/users/:id",
+		"GET /api/v1/users/:id/videos",
+		"GET /api/v1/users/:id/followers",
+		"GET /api/v1/users/:id/follows",
 		"GET /api/v1/videos",
+		"GET /api/v1/videos/ranking",
 		"GET /api/v1/videos/:id",
 		"GET /api/v1/videos/:id/comments",
 		"POST /api/v1/videos/:id/comments",
@@ -56,6 +66,20 @@ func TestCommunityRoutesAreRegistered(t *testing.T) {
 			t.Errorf("route %q is not registered", route)
 		}
 	}
+	// Gin resolves in registration order; the fixed path must precede the
+	// dynamic :id route so "ranking" can never be treated as a video id.
+	paths := r.Routes()
+	index := func(path string) int {
+		for i, route := range paths {
+			if route.Method == http.MethodGet && route.Path == path {
+				return i
+			}
+		}
+		return -1
+	}
+	if index("/api/v1/videos/ranking") >= index("/api/v1/videos/:id") {
+		t.Fatalf("ranking route must precede dynamic video route: ranking=%d dynamic=%d", index("/api/v1/videos/ranking"), index("/api/v1/videos/:id"))
+	}
 }
 
 // TestProtectedRoutesRequireAuthentication 对每个需要登录的端点发一次未携带令牌的
@@ -69,6 +93,8 @@ func TestProtectedRoutesRequireAuthentication(t *testing.T) {
 		path   string
 	}{
 		{http.MethodGet, "/api/v1/users/me"},
+		{http.MethodPatch, "/api/v1/users/me"},
+		{http.MethodPost, "/api/v1/users/me/change-password"},
 		{http.MethodGet, "/api/v1/users/me/videos"},
 		{http.MethodGet, "/api/v1/users/me/videos/1"},
 		{http.MethodGet, "/api/v1/users/me/favorites"},
@@ -98,5 +124,18 @@ func TestProtectedRoutesRequireAuthentication(t *testing.T) {
 				t.Fatalf("status = %d, want 401 without a token", w.Code)
 			}
 		})
+	}
+}
+
+func TestLoginRateLimitFailsClosedWhenRedisUnavailable(t *testing.T) {
+	r := newRouteTestRouter(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 when Redis rate limiter is unavailable", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "RATE_LIMIT_UNAVAILABLE") {
+		t.Fatalf("body = %s, want RATE_LIMIT_UNAVAILABLE", w.Body.String())
 	}
 }

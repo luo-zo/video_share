@@ -31,7 +31,7 @@ func NewRateLimiter(perSecond float64, burst, max int) *RateLimiter {
 
 func (rl *RateLimiter) Middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !rl.allow(c.ClientIP()) {
+		if !rl.Allow(c.ClientIP()) {
 			response.Error(c, http.StatusTooManyRequests, response.CodeRateLimited, "too many requests")
 			return
 		}
@@ -39,7 +39,10 @@ func (rl *RateLimiter) Middleware() gin.HandlerFunc {
 	}
 }
 
-func (rl *RateLimiter) allow(key string) bool {
+// Allow consumes one token for key. It is exported so feature-specific Redis
+// limiters can use this bounded in-process limiter as their documented
+// emergency fallback.
+func (rl *RateLimiter) Allow(key string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 

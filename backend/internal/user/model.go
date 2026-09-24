@@ -16,6 +16,8 @@ type User struct {
 	Username     string    `gorm:"type:varchar(32);uniqueIndex;not null"`
 	PasswordHash string    `gorm:"type:varchar(255);not null"`
 	Nickname     string    `gorm:"type:varchar(64);not null"`
+	Bio          string    `gorm:"type:varchar(200);not null;default:''"`
+	Role         string    `gorm:"type:varchar(32);not null;default:user"`
 	Status       Status    `gorm:"type:tinyint;not null;default:1"`
 	CreatedAt    time.Time `gorm:"not null"`
 	UpdatedAt    time.Time `gorm:"not null"`

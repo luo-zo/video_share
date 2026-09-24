@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -11,7 +12,10 @@ import (
 	"time"
 
 	"github.com/pressly/goose/v3"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
+	"video_share/internal/cache"
 	"video_share/internal/config"
 	"video_share/internal/database"
 	"video_share/internal/messaging"
@@ -19,6 +23,7 @@ import (
 	"video_share/internal/server"
 	"video_share/internal/storage"
 	"video_share/internal/token"
+	"video_share/internal/user"
 )
 
 func main() {
@@ -33,6 +38,10 @@ func main() {
 	// 迁移子命令：`api migrate up|down|status`。
 	if len(os.Args) > 1 && os.Args[1] == "migrate" {
 		runMigrate(cfg, log, os.Args[2:])
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "admin" {
+		runAdminRole(cfg, log, os.Args[2:])
 		return
 	}
 
@@ -59,7 +68,7 @@ func main() {
 	defer publisher.Close()
 	appCtx, stopBackground := context.WithCancel(context.Background())
 	defer stopBackground()
-	dispatcher := outbox.NewDispatcher(outbox.NewRepository(db), publisher, cfg.OutboxPollInterval, 50, log)
+	dispatcher := outbox.NewDispatcherWithTimeout(outbox.NewRepository(db), publisher, cfg.OutboxPollInterval, cfg.KafkaPublishTimeout, 10, log)
 	go dispatcher.Run(appCtx)
 
 	objectStore, err := storage.NewClient(cfg)
@@ -76,7 +85,17 @@ func main() {
 	storageCancel()
 
 	tm := token.NewManager(cfg.JWTSecret, cfg.JWTIssuer, cfg.JWTTTL)
-	router := server.NewRouter(cfg, db, log, tm, objectStore)
+	redisClient := cache.NewClient(cache.Options{
+		Addr:           cfg.RedisAddr,
+		Password:       cfg.RedisPassword,
+		DB:             cfg.RedisDB,
+		DialTimeout:    cfg.RedisDialTimeout,
+		ReadTimeout:    cfg.RedisReadTimeout,
+		WriteTimeout:   cfg.RedisWriteTimeout,
+		CommandTimeout: cfg.RedisCommandTimeout,
+	})
+	defer redisClient.Close()
+	router := server.NewRouter(cfg, db, log, tm, objectStore, redisClient)
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -111,6 +130,59 @@ func main() {
 		_ = sqlDB.Close()
 	}
 	log.Info("server stopped")
+}
+
+// runAdminRole is deliberately an explicit CLI path. There is no default
+// administrator password and no public self-service privilege escalation.
+func runAdminRole(cfg *config.Config, log *slog.Logger, args []string) {
+	if len(args) != 2 || (args[0] != "grant" && args[0] != "revoke") || args[1] == "" {
+		log.Error("usage", "command", "admin grant|revoke <username>")
+		os.Exit(2)
+	}
+	db, err := database.Open(cfg, database.NewGormLogger(log))
+	if err != nil {
+		log.Error("connect mysql", "error", err)
+		os.Exit(1)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		log.Error("get sql.DB", "error", err)
+		os.Exit(1)
+	}
+	defer sqlDB.Close()
+	err = db.Transaction(func(tx *gorm.DB) error {
+		if args[0] == "revoke" {
+			// Lock the complete administrator set in a stable order before
+			// counting, so two concurrent revocations cannot both remove the
+			// last active administrator.
+			var admins []user.User
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("role = ?", "admin").Order("id ASC").Find(&admins).Error; err != nil {
+				return fmt.Errorf("lock administrator set: %w", err)
+			}
+		}
+		var target user.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("username = ?", args[1]).Take(&target).Error; err != nil {
+			return fmt.Errorf("find user: %w", err)
+		}
+		if args[0] == "grant" {
+			return tx.Model(&user.User{}).Where("id = ?", target.ID).Update("role", "admin").Error
+		}
+		if target.Role == "admin" {
+			var admins int64
+			if err := tx.Model(&user.User{}).Where("role = ? AND status = ?", "admin", user.StatusNormal).Count(&admins).Error; err != nil {
+				return err
+			}
+			if admins <= 1 {
+				return fmt.Errorf("cannot revoke the last administrator")
+			}
+		}
+		return tx.Model(&user.User{}).Where("id = ?", target.ID).Update("role", "user").Error
+	})
+	if err != nil {
+		log.Error("admin role update failed", "error", err)
+		os.Exit(1)
+	}
+	log.Info("admin role updated", "action", args[0], "username", args[1])
 }
 
 func newLogger() *slog.Logger {

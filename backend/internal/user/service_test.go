@@ -17,6 +17,8 @@ type mockRepo struct {
 	createFn         func(ctx context.Context, u *User) error
 	findByUsernameFn func(ctx context.Context, username string) (*User, error)
 	findByIDFn       func(ctx context.Context, id uint64) (*User, error)
+	updateProfileFn  func(ctx context.Context, id uint64, nickname, bio string) (*User, error)
+	changePasswordFn func(ctx context.Context, id uint64, passwordHash string) error
 }
 
 func (m *mockRepo) Create(ctx context.Context, u *User) error {
@@ -29,6 +31,14 @@ func (m *mockRepo) FindByUsername(ctx context.Context, username string) (*User, 
 
 func (m *mockRepo) FindByID(ctx context.Context, id uint64) (*User, error) {
 	return m.findByIDFn(ctx, id)
+}
+
+func (m *mockRepo) UpdateProfile(ctx context.Context, id uint64, nickname, bio string) (*User, error) {
+	return m.updateProfileFn(ctx, id, nickname, bio)
+}
+
+func (m *mockRepo) ChangePasswordAndRevokeSessions(ctx context.Context, id uint64, passwordHash string, revokedAt time.Time) error {
+	return m.changePasswordFn(ctx, id, passwordHash)
 }
 
 func testService() (*Service, *mockRepo, *token.Manager) {
@@ -197,5 +207,47 @@ func TestGetByIDDisabled(t *testing.T) {
 
 	if _, err := svc.GetByID(context.Background(), 7); !errors.Is(err, ErrAccountDisabled) {
 		t.Fatalf("expected ErrAccountDisabled, got %v", err)
+	}
+}
+
+func TestUpdateProfileValidatesAndPersists(t *testing.T) {
+	svc, repo, _ := testService()
+	repo.updateProfileFn = func(_ context.Context, id uint64, nickname, bio string) (*User, error) {
+		return &User{ID: id, Username: "alice", Nickname: nickname, Bio: bio, Status: StatusNormal}, nil
+	}
+	u, err := svc.UpdateProfile(context.Background(), 7, "  新昵称 ", " 个人简介 ")
+	if err != nil {
+		t.Fatalf("UpdateProfile: %v", err)
+	}
+	if u.Nickname != "新昵称" || u.Bio != "个人简介" {
+		t.Fatalf("updated user = %+v", u)
+	}
+	if _, err := svc.UpdateProfile(context.Background(), 7, "", "bio"); !errors.Is(err, ErrNicknameInvalid) {
+		t.Fatalf("empty nickname error = %v", err)
+	}
+	if _, err := svc.UpdateProfile(context.Background(), 7, "nick", strings.Repeat("简", 201)); !errors.Is(err, ErrBioInvalid) {
+		t.Fatalf("long bio error = %v", err)
+	}
+}
+
+func TestChangePasswordVerifiesOldAndRevokesSessionsInRepositoryOperation(t *testing.T) {
+	svc, repo, _ := testService()
+	hash, _ := bcrypt.GenerateFromPassword([]byte("old-password"), bcrypt.DefaultCost)
+	repo.findByIDFn = func(_ context.Context, id uint64) (*User, error) {
+		return &User{ID: id, PasswordHash: string(hash), Status: StatusNormal}, nil
+	}
+	var newHash string
+	repo.changePasswordFn = func(_ context.Context, _ uint64, passwordHash string) error {
+		newHash = passwordHash
+		return nil
+	}
+	if err := svc.ChangePassword(context.Background(), 7, "old-password", "new-password"); err != nil {
+		t.Fatalf("ChangePassword: %v", err)
+	}
+	if newHash == "" || bcrypt.CompareHashAndPassword([]byte(newHash), []byte("new-password")) != nil {
+		t.Fatal("new password was not hashed")
+	}
+	if err := svc.ChangePassword(context.Background(), 7, "wrong-password", "new-password"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("wrong old password error = %v", err)
 	}
 }

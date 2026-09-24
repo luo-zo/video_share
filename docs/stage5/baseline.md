@@ -1,7 +1,7 @@
 # 第五阶段基线报告（T00）
 
 **采集时间：** 2026-09-22
-**采集目录：** `C:/Users/27339/Desktop/video_share`（主仓库，非 worktree）
+**采集目录：** 仓库根目录（主仓库，非 worktree）
 **对应任务书：** `docs/superpowers/plans/2026-09-22-stage5-feature-expansion.md`（v2.0）
 
 本文件只记录**本次实际执行**得到的观察结果。凡未实际运行的检查，均在末尾“未验证项”中单独列出。
@@ -26,9 +26,9 @@
 ### 1.1 worktree 副本（重要）
 
 ```
-C:/Users/27339/Desktop/video_share                              cff21bd [main]
-C:/Users/27339/Desktop/video_share/.worktrees/stage4-community  b7116bf [feature/stage4-community]
-C:/Users/27339/Desktop/video_share/.worktrees/stage5-upgrade    8452e3a [feature/stage5-upgrade]
+仓库根目录                                      cff21bd [main]
+.worktrees/stage4-community                    b7116bf [feature/stage4-community]
+.worktrees/stage5-upgrade                      8452e3a [feature/stage5-upgrade]
 ```
 
 `.worktrees/stage5-upgrade` 是今日实际完成 T01 的副本，位于 `feature/stage5-upgrade` 分支，含三个提交（`372469e` → `7e6430a` → `8452e3a`），基线同为 `cff21bd`。T01 的修复只能在该分支内进行，第 11 节记录了本轮的收口结果。
@@ -38,7 +38,7 @@ C:/Users/27339/Desktop/video_share/.worktrees/stage5-upgrade    8452e3a [feature
 - 这 35 个文件的**内容与 main 完全一致**，差异**全部是 CRLF/LF 换行符**造成的假修改；
 - 唯一真实差异是 `backend/internal/server/auth_routes_integration_test.go`（main 中已跟踪，worktree 中因基础版本较早而缺失）。
 
-**结论：worktree 中不存在独立的未提交业务改动，无丢失风险。** 但按任务书要求，第五阶段一律在主仓库 `C:/Users/27339/Desktop/video_share` 的 `main` 上进行，**不进入、不修改该 worktree**。
+**结论：worktree 中不存在独立的未提交业务改动，无丢失风险。** 但按任务书要求，第五阶段一律在主仓库 `main` 上进行，**不进入、不修改该 worktree**。
 
 ### 1.2 换行符问题（环境事实，非缺陷）
 
@@ -614,4 +614,281 @@ frontend/tests/e2e/routes.spec.ts
 
 前端（`frontend/`）：`npm run typecheck` **EXIT=0**；`npm test` **通过**（Vitest 12 文件 / **76 用例**、legacy **101 通过 / 0 失败**）；`npm run build` **EXIT=0**（2.50s，`hls.light-Cm5ppQ94.js` 370.93 kB / gzip 117.84 kB，无 chunk 警告）；`E2E_PORT=5273 npm run test:e2e` **5 passed (6.1s)**。
 
-**未做**：`git commit`、`git push`（按要求）。也未开始 T02 及后续。
+**未做**：`git commit`、`git push`（按要求）。当时尚未开始 T02；后续进度见第 14、15 节。
+
+## 14. T02 Redis 基础设施与分区缓存边界（2026-09-23）
+
+### 14.1 迁移边界
+
+本轮明确采用“可注入数据源缓存组件”方案：**T02 不创建 `categories` 表，也不新增分类迁移或分类路由**。任务书中的 `000006_sessions_profiles` 保留给 T03；`categories`、`tags`、`video_tags` 必须等到 T05 的 `000007_taxonomy` 再创建。T02 只提供 `video_share:cache:categories:v1` 的 JSON 缓存接缝，T05 再把真实 taxonomy repository 接入。
+
+### 14.2 实际改动
+
+- `backend/internal/cache/redis.go`：go-redis 客户端封装、连接/读写/命令超时、Ping、Lua Eval、有限 TTL 写入和关闭。
+- `backend/internal/cache/json.go`：通用 JSON 缓存、300 秒基础 TTL + 抖动、singleflight 热点合并、有限回源并发、回源降级、缓存失效和进程内统计。
+- `backend/internal/middleware/redis_ratelimit.go`：Lua 原子固定窗口限流、`Retry-After`、Redis 故障拒绝/进程内降级两种策略及诊断计数。
+- `backend/internal/server/router.go`：登录/注册使用 Redis 严格拒绝策略；评论使用 Redis 并在故障时退化为有界进程内限流。
+- `backend/internal/config/config.go`、`backend/.env.example`：Redis 连接和四类限流默认值与校验。
+- `backend/deploy/docker-compose.yml`：固定 `redis:7.4.2-alpine`、健康检查、持久卷和 API 内部地址覆盖。
+- `backend/internal/cache/*_test.go`、`backend/internal/middleware/redis_ratelimit*_test.go`：单元、故障、并发、真实 Redis 和跨客户端共享配额测试。
+
+### 14.3 实际验证
+
+- `go test ./... -count=1`：通过。
+- `go test -race ./...`：通过。
+- `go vet ./...`：通过。
+- `go build ./cmd/api ./cmd/worker`：通过。
+- `docker compose --env-file .env -f deploy/docker-compose.yml config --quiet`：通过。
+- Redis 容器 `redis:7.4.2-alpine`：健康检查通过。
+- `TEST_REDIS_ADDR=127.0.0.1:6379 TEST_REDIS_DB=15 REQUIRE_INTEGRATION_TESTS=true go test -race -tags integration ./internal/cache ./internal/middleware -count=1`：通过；覆盖真实 Redis 缓存读写/失效和两个独立客户端共享限流配额。集成辅助在 required 模式下对缺少地址/DB 或连接失败 fail-closed，缓存测试使用唯一测试键。
+
+### 14.4 仍未完成
+
+- T02 尚未提交 Git，未推送远端。
+- 未创建 taxonomy 表、分类接口或标签业务；这些属于 T05。
+- 尚未对 T02 做正式压测，因此不宣称 QPS、命中率或数据库查询下降；性能对比留到 T12。
+- 真实 MySQL/Kafka 集成竞态仍受 `TEST_MYSQL_DSN`/`TEST_KAFKA_BROKERS` 门控，未因 Redis 验证而自动变为已验证。
+- 本轮未改变 MySQL/Kafka 集成测试的跳过策略；`REQUIRE_INTEGRATION_TESTS` 的 fail-closed 辅助已用于 Redis T02 用例，T10 仍需统一覆盖全部外部依赖。
+
+## 15. T03 持久会话与账号设置（2026-09-23）
+
+### 15.1 实际改动
+
+- `backend/migrations/000006_sessions_profiles.sql`：为用户增加 `bio`/`role`，创建 session family 与 refresh token 表；refresh token 仅保存 SHA-256，family 具有绝对到期和撤销时间。
+- `backend/internal/session/`：实现加密随机 refresh token、JWT `sid`、事务轮换、窗口内冲突、窗口外重放撤销整族、退出撤销和会话校验；并提供 Cookie/CSRF/资料/改密处理器。
+- `backend/internal/middleware/auth.go`、`csrf.go`：受保护路由强制 sid 和活动 family，Cookie 驱动写操作精确 Origin + 双提交 CSRF + JSON Content-Type。
+- `backend/internal/user/`、`token/`、`config/`、`server/router.go`：账号资料、改密事务撤销全部 family、15 分钟访问令牌及会话配置和新路由。
+- `frontend/src/api/auth.ts`、`client.ts`、`stores/auth.ts`、`main.ts`、`views/SettingsView.vue`：访问令牌只在内存，HttpOnly refresh Cookie 恢复；single-flight、Web Locks、冲突重试上限、资料编辑和改密界面。
+
+### 15.2 测试与实际结果
+
+- `go test ./... -count=1`：通过。
+- `go test -tags integration ./internal/session ./internal/database ./internal/server -count=1`：通过；使用 root 仅为创建隔离测试库，测试结束自动删除，未连接业务库。覆盖两并发刷新一成功一冲突、窗口外旧 token 重放撤销整族、迁移回滚/部分 ALTER 恢复、sid 受保护路由和请求体上限。
+- `go test -race -tags integration ./... -count=1`：此前 T03 单独收口时通过；本轮加入 T04 后并行全包重跑在本机 MySQL 11 分钟超时，详见 §16.3，不能把本轮全包写成通过。
+- `go test -race ./... -count=1`、`go vet ./...`、`go build ./cmd/api ./cmd/worker`：均通过；无竞态报告。
+- `npm run typecheck`：通过。
+- `npx vitest run`：14 个文件、82 个用例通过。
+- `E2E_PORT=5275 npm run test:e2e`：6 passed；登录 E2E 已覆盖 CSRF/refresh 启动链路 mock，并新增公开创作者深链。
+- T03 退出竞态补测：前端 4 个会话用例通过；真实 MySQL session/server 集成（race）通过，覆盖有效 access 无 refresh cookie、过期 access 按 refresh cookie 退出和旧 JWT 立即失效。
+- `npm run build`：通过；Settings 懒加载 chunk 及 hls.light chunk 生成，无构建错误。
+
+### 15.3 未验证与限制
+
+- 尚未把 T02/T03 工作区提交或推送；不执行远端操作。
+- MySQL 集成测试使用本机 root 权限创建临时库；默认 `video_share` 业务用户没有 `CREATE DATABASE` 权限，部署环境需按任务书 §7.3 单独授予测试库权限或使用专用测试账号。
+- 未做真实浏览器连接 Go API 的全栈业务演示（当前 Playwright 仍使用路由 mock）；性能数字留到 T12，不提前声称。
+
+## 16. T04 公开创作者主页与关系展示（2026-09-23）
+
+### 16.1 实际改动
+
+- `backend/internal/creator/`：新增公开资料投影、关系计数、公开视频分页和禁用/不存在统一 404；不返回密码、状态、角色或会话字段。
+- `backend/internal/video/repository.go`：新增 `ListPublicByUser`，分页前应用 ready/public/normal-author 过滤。
+- `backend/internal/follow/`：扩展粉丝与关注公开分页查询，双方均过滤禁用账号。
+- `backend/internal/server/router.go`：注册 `/users/:id`、`/users/:id/videos`、`/users/:id/followers`、`/users/:id/follows`，主页使用可选鉴权计算关注状态。
+- `frontend/src/api/creator.ts`、`views/CreatorView.vue`、`components/CreatorCard.vue`：增加公开主页、分页关系列表、关注/取关与作者链接；Vite/旧代理加入动态公开主页白名单。
+
+### 16.2 测试与实际结果
+
+- `go test -race ./... -count=1`、`go vet ./...`、`go build ./cmd/api ./cmd/worker`：通过。
+- `go test -race -tags integration ./internal/creator ./internal/follow ./internal/video -count=1`：通过；真实 MySQL 覆盖公开/私密/处理中作品过滤、禁用作者、正常关系计数及粉丝/关注分页。
+- `go test -race -tags integration ./internal/server ./internal/session -count=1`：通过；覆盖 logout 两种身份来源及旧 JWT 失效。
+- `npm test`：14 个 Vitest 文件 82 个用例，加 93 个迁移期 node:test 用例，全部通过。
+- `npm run typecheck`、`npm run build`：通过。
+- `E2E_PORT=5275 npm run test:e2e`：6 passed，新增公开创作者深链。
+
+### 16.3 未验证与限制
+
+- `go test -race -tags integration ./... -count=1` 本轮全包并行重跑在本机 MySQL 11 分钟超时，database/engagement/follow/user/video 包被测试进程杀掉；已拆分执行并通过 T03/T04 相关包，不能把这次全包结果写成通过。
+- T04 尚未提交或推送；没有公开资料缓存，也未提前声称性能提升。
+
+## 17. T05 分区、标签、关注流和相关推荐（2026-09-23）
+
+### 17.1 实际改动
+
+- `backend/migrations/000007_taxonomy.sql`：新增 `categories`、`tags`、`video_tags`，为旧视频增加 `category_id` 并预置未分类、生活、知识、科技、游戏、音乐；历史投稿默认归入未分类。
+- `backend/internal/taxonomy/`：分类/标签模型、Unicode NFC + 小写标准化、1–20 字符与最多 5 个标签限制、事务去重/替换、分类 JSON 缓存接入和回源降级。
+- `backend/internal/video/`：投稿/编辑兼容 `category_id`、`tags`；发现支持分类与多标签筛选；新增关注流与最多 6 条规则相关推荐。公开查询仍在 MySQL 侧校验 ready/public/正常作者，Redis 不保存权限真相。
+- `backend/internal/server/router.go`、`frontend/server.mjs`：新增 `/api/v1/categories`、`/api/v1/feed/following`、`/api/v1/videos/:id/related` 白名单与路由。
+- `frontend/src/api/taxonomy.ts`、`video.ts`、`DiscoverView.vue`、`UploadView.vue`、`FollowingView.vue`、`VideoDetailView.vue`：接入分类筛选、标签输入、关注流、相关推荐和投稿字段；作者编辑表单也会回填并提交分区/标签。
+
+### 17.2 实际验证
+
+- 在隔离 MySQL 测试库执行 `go run ./cmd/api migrate up`：`000006_sessions_profiles.sql`、`000007_taxonomy.sql` 均成功应用；未清理或重建业务库。
+- `go test -race -tags integration ./internal/taxonomy -count=1`：通过；覆盖真实迁移、Unicode 标签去重、分类/标签关联、分类筛选、关注流权限过滤和相关推荐排序。
+- `go test -race -tags integration ./internal/video ./internal/creator ./internal/follow -count=1`：通过。
+- `go test -race ./... -count=1`、`go vet ./...`、`go build ./cmd/api ./cmd/worker`：通过。
+- `npm run typecheck`、`npm test`（Vitest 14 文件/82 用例，legacy 101/101）、`npm run build`：通过。
+- `node --test tests/server.test.mjs`：通过，新增分类、关注流、相关推荐代理白名单断言。
+- `$env:E2E_PORT='5275'; npm run test:e2e`：6/6 通过；这些用例仍以路由 mock 为主，不能等同真实全栈浏览器验收。
+- T05 收口复审发现的作者编辑缺口已补齐；详情页定向单测 4/4 及完整前端门禁重新通过。
+
+### 17.3 未验证与限制
+
+- T05 尚未提交或推送；未执行任何远端操作。
+- 分类目前只有预置数据和读取缓存，没有管理员分类维护接口；分类修改/失效接缝已保留给后续治理或运维命令。
+- 相关推荐是规则排序，不是机器学习推荐；本轮未做 QPS、缓存命中率或 SQL 次数性能结论。
+- 真实 API + Vite + Worker 的浏览器直传/转码/HLS 全链路仍留到 T10/T11；本轮 E2E 不伪装成真实依赖验收。
+
+## 18. T06 评论回复、通知与幂等收据（2026-09-23）
+
+### 18.1 实际改动
+
+- `backend/migrations/000008_notifications_replies.sql`：为评论增加 `parent_id/root_id`，新增 `notifications` 与 `operation_receipts`，旧评论回填为根评论。
+- `backend/internal/engagement/`：一层回复校验、根评论/回复分页、删除占位、评论 request_id 重放与冲突检测；评论、回复通知与必要计数在同一事务完成。
+- `backend/internal/follow/`：新增关注通知和 request_id 幂等收据，已存在关系不会重复通知。
+- `backend/internal/notification/`：结构化通知模型、MySQL 未读计数、单条/全部已读和所有权校验。
+- `frontend/src/api/notification.ts`、`stores/notifications.ts`、`views/NotificationsView.vue`、`components/CommentThread.vue`：回复交互、通知 30 秒轮询、页面隐藏暂停和退出清空迟到结果。
+
+### 18.2 实际验证
+
+- `go run ./cmd/api migrate up`：本地业务库仅追加应用 `000008_notifications_replies.sql`，未清库。
+- `go test ./... -count=1`、`go test -race ./... -count=1`、`go vet ./...`、`go build ./cmd/api ./cmd/worker`：通过。
+- `go test -race -tags integration ./internal/engagement ./internal/follow -count=1`：通过；覆盖评论重放/冲突、同视频回复、通知接收人矩阵、关注通知重放。
+- `go test -race -tags integration ./internal/database -run 'TestCommunitySchemaConstraintsAndBackfill|TestSessionMigrationRecoversPartiallyAppliedUserAlter' -count=1`：通过；迁移回滚/部分应用恢复测试已按 000006–000008 顺延。
+- `npm test`：Vitest 16 文件/85 用例，legacy 101/101；`npm run typecheck`、`npm run build`、`node --test tests/server.test.mjs` 均通过；使用隔离端口 `E2E_PORT=5183` 的 Playwright E2E 6/6（仍为路由 mock）。默认 5173 若已有其他工作树服务会被复用，不能作为本工作树证据。
+
+### 18.3 未验证与限制
+
+- T06 尚未提交或推送；未执行远端操作。
+- 通知目标失效时前端只展示结构化事件和“打开相关视频”入口，治理处置字段属于 T07；未复制评论正文。
+- 评论删除后的根列表由服务层映射为“评论已删除”占位，历史底层正文仍保存在软删除行中，后续治理审计可用。
+- 未宣称 WebSocket、跨区域顺序或性能提升；轮询与 SQL 查询性能留到 T12。
+
+## 19. T07 举报、管理处置与审计（2026-09-23）
+
+### 19.1 实际改动
+
+- `backend/migrations/000009_moderation.sql`：为视频/评论增加 `moderation_status`，新增 `reports` 与 `moderation_actions`，活动举报唯一键、管理员/目标/审计索引及外键；新增 DDL 通过 information_schema 存在性检查和 `CREATE TABLE IF NOT EXISTS` 支持部分提交后的重试恢复，Down 同样可重入。
+- `backend/internal/moderation/`：举报创建与本人列表、管理员实时角色校验、并发接单、驳回/带处置结案、视频/评论隐藏恢复、账号禁用恢复、追加审计和结构化通知；处置写入与状态/计数在同一事务。
+- `backend/internal/middleware/require_admin.go`、`cmd/api/main.go`：管理 API 每次查询当前数据库角色；显式 `admin grant/revoke <username>` CLI，撤回最后正常管理员会拒绝。
+- `/reports` 按用户 ID 使用 Redis 固定窗口限流（默认 5 次/10 分钟）；Redis 故障时降级到有界进程内限流，避免举报入口无限写入。
+- 禁用账号在同一治理事务撤销全部 `session_families`，刷新仓储再次校验数据库账号状态；管理员集合按稳定顺序加锁，保护最后一个正常管理员。
+- `video`、`engagement`、`creator` 公开/互动/历史查询统一过滤治理隐藏状态；HLS/封面复用公开详情条件，隐藏视频不会继续签发新媒体地址，创作者公开作品计数也不包含隐藏视频。
+- `frontend/src/api/moderation.ts`、`ReportDialog.vue`、`ReportsView.vue`、`AdminReportsView.vue`、`AuditView.vue`：举报弹窗、本人进度、管理员工作台和审计页；代理白名单转发幂等请求头。
+
+### 19.2 实际验证
+
+- `go run ./cmd/api migrate up`：本地业务库仅追加应用 `000009_moderation.sql`，未清库。
+- `go test -race -tags integration ./internal/moderation ./internal/session ./internal/database -count=1`：通过；真实 MySQL 覆盖举报重放/活动重复、两管理员并发接单一胜一冲突、并发禁用管理员的最后管理员保护、禁用账号会话族撤销、刷新拒绝、处置通知、隐藏恢复、评论计数调整、失败回滚、已删除内容不可恢复，以及 000009 部分 DDL 应用后的迁移恢复。
+- `go test -race -tags integration ./... -count=1`：通过；所有真实依赖集成包通过，测试使用独立临时库并在清理时删除，未触碰业务数据库。
+- `go test -race -tags integration ./internal/server -run TestReportRouteFallsBackToPerUserRateLimitWhenRedisIsUnavailable -count=1`：通过；真实路由验证首个举报成功、Redis 不可用时同一用户第二次请求返回 429。
+- `go test -race ./... -count=1`、`go vet ./...`、`go build ./cmd/api ./cmd/worker`：通过。
+- `npm test`：Vitest 17 文件/87 用例，legacy 101/101；`npm run typecheck`、`npm run build`、`node --test tests/server.test.mjs`：通过。
+- 使用隔离端口 `E2E_PORT=5184 npm run test:e2e`：6/6 通过；仍是路由 mock，不等同真实 API 全链路。
+
+### 19.3 未验证与限制
+
+- T07 尚未提交或推送；未执行任何远端操作。
+- 管理工作台当前以结构化目标 ID 展示，不自动抓取目标正文/媒体；真实浏览器举报—处置闭环留给 T11 全栈 E2E。
+- 隐藏内容不再进入公开发现、主页、相关推荐、关注流、收藏/历史、评论和 HLS/封面新签名；已发出的对象存储预签名地址仍受其原到期时间约束。
+- 未宣称性能提升、残余签名窗口或压测数字；这些留到 T11/T12 实测。
+
+## 20. T08 有效观看、创作者数据中心与断点续播（2026-09-23）
+
+### 20.1 实际改动
+
+- `backend/migrations/000010_metrics.sql`：为观看历史增加有效观看累计与最近计时点，新增观看会话、视频日指标和创作者日指标；新增列采用 information_schema 检查，Down 可重入。
+- `backend/internal/analytics/`：实现观看会话创建、序号幂等心跳、每次最多 15 秒与跨标签页共享计时上限、3 秒有效观看门槛、80% 完播条件、历史进度和创作者汇总查询。
+- `backend/internal/engagement/`、`internal/follow/`：点赞、收藏、评论和关注的真实关系变更与视频/创作者日指标在同一事务写入。
+- `frontend/src/composables/useWatchSession.ts`、`components/VideoPlayer.vue`：按可见且实际播放的墙钟时间采样，暂停/缓冲/拖动/切后台/卸载边界心跳，序号递增并清理所有监听器；播放页按服务端 resume 位置断点续播。
+- `frontend/src/views/CreatorDashboardView.vue`、`api/analytics.ts`：新增登录后的 `/creator-center` 数据中心，展示 7/30 天趋势和公开作品 Top 10，不生成虚假数据。
+
+### 20.2 实际验证
+
+- T08 后端观看会话集成测试通过：重复 seq、暂停标签空心跳不阻塞活跃标签、跨标签共享计时、有效播放/完播、跨上海午夜 cohort、断点重置、隐藏视频拒绝、创作者趋势和 Top 10（`go test -race -tags integration ./internal/analytics -run TestWatchSessionCreditsOnceAndSharesCapAcrossTabs -count=1`）。
+- `go test -race -tags integration ./internal/analytics ./internal/database ./internal/engagement ./internal/follow -count=1`：通过；覆盖 000010 部分 DDL 恢复以及关系净指标事务写入。测试使用 root 仅创建隔离临时库，未连接业务库。
+- 后端最终门禁：`go test -race ./... -count=1`、`go vet ./...`、`go build ./cmd/api ./cmd/worker` 均 EXIT=0；此前发现的 cache 并发测试调度抖动已通过等待所有调用者进入并发区间修正。
+- 前端新增 analytics API 与 watch-session 单元测试；`npm run typecheck` EXIT=0，`npm test` 通过（Vitest 19 文件/90 用例、legacy 101/101），`npm run build` EXIT=0，隔离端口 `E2E_PORT=5187 npm run test:e2e` 6/6 通过。E2E 仍为路由 mock，不等同真实 API 全链路。
+
+### 20.3 未验证与限制
+
+- T08 尚未提交或推送；未执行远端操作。
+- 旧 `/videos/:id/watch` 兼容接口仍保留，Vue 播放页已迁移到 watch-session；真实 API、Vite、MySQL、Redis、MinIO、Kafka 的浏览器全链路验收仍留在 T11。
+- 当前只记录有效观看指标，不宣称 QPS、命中率或观看时长提升；压测与故障演练留到 T12。
+
+## 21. T09 Redis 日榜/周榜与可重建快照（2026-09-23）
+
+### 21.1 实际改动
+
+- `backend/internal/ranking/`：按 Asia/Shanghai 自然日聚合 `video_daily_metrics`，评分固定为 `effective_views + 3*max(net_likes,0) + 5*max(net_favorites,0) + 2*max(net_comments,0)`；同分按视频 ID 降序。
+- Redis ZSET 使用 `video_share:rank:{day|week}:YYYY-MM-DD`，构建写入带 owner 的临时键，完成后 `RENAME` 原子替换；锁带 owner 校验和 30 秒 TTL，快照 TTL 180 秒，日期键保留不超过 8 天。
+- 榜单读取只把 Redis 当候选 ID/分数来源，随后在 MySQL 重新校验正常作者、ready、public、visible，并填充分页；Redis 丢失、过期或不可用时回源 MySQL 日指标，MySQL 是永久权威来源。
+- `backend/cmd/ranking-rebuild`：默认每 60 秒重建日榜和周榜，可用 `day`/`week` 限定窗口；`RANKING_REBUILD_ONCE=1` 适合一次性任务或测试。
+- `GET /api/v1/videos/ranking?window=day|week&page=&page_size=` 与前端 `/ranking` 日榜/周榜页；响应返回 `generated_at`，空榜显示合规空状态。
+
+### 21.2 已验证
+
+- `go test ./internal/ranking ./internal/cache`：通过；覆盖上海日期边界、初版评分、同分次序、Redis 锁 owner、ZSET 临时键原子替换、回源拥塞错误映射和超大分页拒绝。
+- `go test -race -tags integration ./internal/ranking -count=1`：通过（真实 MySQL/Redis）；覆盖隐藏/私密候选过滤、快照过期与 Redis 清空回源、空榜/无指标时最新公开视频零分兜底、锁冲突、原子重建和 Redis 故障保留旧快照。
+- `go test ./... -count=1`、`go test -race ./... -count=1`、`go vet ./...`：通过；后者覆盖本轮新增榜单回源并发保护。
+- `go build ./cmd/api ./cmd/worker ./cmd/ranking-rebuild`：通过；路由接入和榜单重建命令编译通过。
+- `npm run typecheck`、`npm test`（Vitest 20 文件/92 用例，legacy 101/101）、`npm run build`：通过；榜单 API 参数边界和页面构建通过。
+- `$env:E2E_PORT='5192'; npm run test:e2e`：7/7 通过；新增真实浏览器榜单日榜/周榜切换用例。用例仍使用 API 路由 mock，不等同真实全栈浏览器验收。
+
+### 21.3 未验证与限制
+
+- 上述集成测试依赖专用 MySQL DSN 与 Redis DB 15；普通开发未设置这些变量时仍会跳过，不能把跳过写成真实依赖已验证。
+- Redis 命中路径按 200 个候选批量回查 MySQL，回源并发槽位当前为 4；超过容量明确返回 503。尚未在 T12 压测中测定其 QPS、SQL 次数或命中率。
+- 尚未运行 T12 的命中/未命中压测，因此不宣称缓存命中率、SQL 次数或性能提升；真实浏览器全链路仍属于 T11。
+
+## 22. T10 部署、CI 与文档（2026-09-23–24，本地隔离 Compose 验收通过）
+
+### 22.1 已实现
+
+- `backend/Dockerfile` 增加独立榜单重建运行镜像，Go 构建镜像固定到 1.26.3；`frontend/Dockerfile` 将 Vue 构建产物交给 Nginx，`frontend/deploy/nginx.conf` 配置静态资源、深链回退、`/api/` 同源代理、安全头、CSP 和 32 KiB API 请求体限制。
+- Compose 增加 `demo` profile 的前端与榜单重建服务；MySQL、Redis、MinIO、Kafka、API、Worker 保持原有数据卷。迁移改为显式执行，未调用 `down -v` 或清空业务库。
+- `.github/workflows/ci.yml` 分为前端类型/单元/构建、浏览器路由 E2E、Go 单元/race/vet/build 和真实依赖集成任务；集成任务配置 MySQL、Redis、Kafka、MinIO、FFmpeg 与 MySQL 客户端，强制缺依赖失败。
+- 新增真实 MinIO 预签名上传/读取、FFmpeg/FFprobe 处理和两个一次性 MySQL 库间 `mysqldump`/`mysql` 备份恢复集成用例；更新部署、接口、架构和 README。
+- 真实 MySQL 并发门禁暴露了创建举报与结案更新之间的 `active_key` 次级索引 ↔ 主键锁顺序死锁；创建逻辑改为先非锁定读取 ID、再按主键锁定并复核状态。原测试连续失败，修复后连续 5 次通过。测试夹具的会话族 ID 也改为符合 `CHAR(36)` 的 UUID。
+- 复审又发现带 `report_id` 的直接处置与举报结案在举报行/目标行间形成反向锁；新增真实并发用例在修复前连续复现 1213。两条路径现统一先锁举报行、再查幂等收据、再锁目标行；收据摘要包含 `report_id`，同请求 ID 换关联返回冲突。目标已由并发管理员设为相同状态时记录真实 `before_state=after_state` 的审计，但不重复发目标状态变化通知，也不把 SQL no-op 误报成目标不存在。
+- 同一管理员既举报又结案时，`report.create` 与 `report.resolve` 的缺失收据会触发 MySQL 间隙锁反向等待；新增同 actor 用例在修复前真实复现 1213。四类治理写事务现仅对 MySQL 1213 进行最多 4 次额外的整事务重试（10/20/40/80 ms）；审计、通知、计数及收据全部在同一事务内，失败尝试不会部分提交，超时或其他错误不重试。
+- 复审发现旧 Compose MySQL 健康检查以 exec 形式传入字面量 `$MYSQL_ROOT_PASSWORD`，且 `mysqladmin ping` 对认证失败也可能返回成功；现改为容器 shell 展开密码后执行 `mysql SELECT 1`，实际认证探针已在运行中的 MySQL 容器验证通过。
+
+### 22.2 本机实际验证
+
+- 2026-09-24 收尾复验：在 `REQUIRE_INTEGRATION_TESTS=true` 并显式配置本机 MySQL、Redis DB 15、Kafka、MinIO、FFmpeg/FFprobe 后，`go test -race -tags integration ./... -count=1 -timeout=8m` EXIT=0；所有带集成标签的依赖包均通过，没有因缺少依赖而跳过。慢包为 engagement 142.553s、database 75.893s、follow 83.055s、moderation 35.507s、video 56.618s。测试辅助函数创建/清理唯一命名的临时 MySQL 库，不操作业务库。
+- 同日后端普通门禁复跑：`go test ./... -count=1`、`go test -race ./... -count=1`、`go vet ./...`、`go build ./cmd/api ./cmd/worker ./cmd/ranking-rebuild` 均 EXIT=0。
+- 同日前端门禁复跑：`npm run typecheck` EXIT=0；`npm test` 中 Vitest 20 文件/92 用例及 legacy 101/101 全通过；`npm run build` EXIT=0；`$env:E2E_PORT='5194'; npm run test:e2e` 7/7 通过。E2E 使用 API 路由 mock。
+- Docker Desktop 截图中 Docker Desktop proxy 为 System proxy、Containers proxy 为 Same as host proxy。Windows 系统代理路径访问 `auth.docker.io` 返回 200、`registry-1.docker.io/v2/` 返回预期 401；`docker pull nginx:1.29.1-alpine`、`golang:1.26.3-alpine`、`node:22.22.3-alpine`、`alpine:3.22` 均通过。首次 Compose build 的镜像拉取已通过，但构建步骤中的 `npm ci` 因 ECONNRESET 失败；加入 `HTTP_PROXY`/`HTTPS_PROXY=http://http.docker.internal:3128` 的临时 build args 后，`api`、`worker`、`ranking-rebuild`、`frontend` 四个镜像全部构建成功，未把代理写入 Dockerfile 或运行镜像。
+- 对构建出的 Nginx 镜像做隔离冒烟：用临时 Node API stub 满足 `api:8081` 上游解析，容器映射至 5194；`/healthz`、`/`、`/ranking` 返回 200，`/api/` 能到达 stub，CSP/`X-Content-Type-Options`/`X-Frame-Options`/`Referrer-Policy` 响应头存在，33 KB API 请求返回 413。临时 stub/Nginx 容器已清理；该项不是完整 Go API 全链路验收。
+- Docker 镜像构建的 `npm ci` 报告 2 个 moderate 依赖漏洞；本轮未执行 `npm audit fix --force`，待单独审查依赖路径和可升级范围。
+- `backend/deploy/docker-compose.isolated-smoke.yml` 为本地完整 Compose 验收清除固定容器名、映射独立端口、采用项目隔离卷，并显式使用 `.env.example` 与进程内随机测试凭证；普通演示 Compose 未改变。隔离栈另挂载 `frontend/deploy/nginx.isolated-smoke.conf` 放行自身 MinIO 19000 端口，不放宽生产 Nginx 的 CSP。
+- 2026-09-24 完整隔离栈实跑：四个应用镜像构建成功；独立 MySQL/Redis/MinIO/Kafka 健康，Kafka topic 初始化成功，迁移 `000001`–`000010` 全部成功；API `/readyz` 为 `ready`，API、前端健康检查通过，Worker 与榜单重建进程保持运行。隔离栈映射前端 15173、API 18081、MySQL 13308、Redis 16379、MinIO 19000/19001、Kafka 19092，使用 `stage5-smoke-20260924` 自有网络和数据卷。
+- 同一真实栈经 Nginx 验证 `/`、`/ranking`、`/login?returnTo=/`、`/healthz` 为 200；公开视频列表代理到真实 Go API 为 200；34 KB JSON 请求为 413；CSP、`nosniff`、`DENY`、Referrer-Policy 响应头存在，隔离 CSP 允许 MinIO 19000。MinIO 19000 的浏览器 Origin 预检为 204，返回精确的 `Access-Control-Allow-Origin: http://127.0.0.1:15173`。
+- 本机浏览器直接打开隔离栈 `/`，随后直达 `/ranking` 并刷新；刷新后 URL 仍为 `/ranking`，Vue 榜单页正常渲染“尚无数据”空状态。此为路由/深链浏览器烟测，不等同 T11 的业务闭环 E2E。
+- 经 Nginx 用一次性合成账号实测注册 201、获取 CSRF、同源登录 200、刷新 Cookie 同时有 `HttpOnly` 和 `SameSite=Lax`、登出 204。未使用现存业务账号或媒体。当前隔离栈为方便后续浏览器验收仍运行；没有停止、重启或迁移既有开发服务与业务数据卷。
+- `go test -race -tags integration ./... -count=1`：修复死锁后全包通过，增加备份恢复用例后又全包重跑一次通过；真实依赖为本地 MySQL/Redis/Kafka/MinIO/FFmpeg。备份恢复新用例单独运行通过：恢复 1 个账号、1 条视频元数据和 11 条已应用迁移记录，dump 为 34,165 字节；测试库由唯一名称辅助函数清理。
+- `go test ./... -count=1`、`go test -race ./... -count=1`、`go vet ./...`、`go build ./cmd/api ./cmd/worker ./cmd/ranking-rebuild`：通过。
+- `npm run typecheck`、`npm test`（Vitest 20 文件/92 用例，legacy 101/101）、`npm run build`：通过；隔离端口 `E2E_PORT=5194 npm run test:e2e` 为 7/7，通过的是 API 模拟路由用例。
+- `docker compose --profile demo --env-file backend/.env -f backend/deploy/docker-compose.yml config --quiet` 与 `git diff --check`：退出码 0。对运行中的 MinIO 发起本地 Origin/PUT 预检，返回 204 且 `Access-Control-Allow-Origin` 精确为 `http://127.0.0.1:5173`。
+- 新增带 `report_id` 直接处置与结案并发用例：修复前真实 MySQL 连续 10 次失败，固定举报→收据→目标锁序后连续 10 次通过；再增加不带关联的直接处置竞争，合并场景连续 5 次通过。原创建举报/结案竞态复测结果见下方最终门禁。
+- 同 actor 创建举报/结案竞态在修复前触发真实 1213；加入有界整事务重试后，`TestModerationReportLifecycleAndVisibility` 以真实 MySQL、`-race -count=10` 通过。重试单测覆盖成功、重试上限、非 1213 不重试和上下文取消。
+
+### 22.3 未验证与阻塞
+
+- 本轮验证了真实 Go API 代理与 cookie/CORS HTTP 契约，但未用浏览器做完整业务流程；注册—投稿—转码—互动—治理闭环、Worker/Kafka/Redis 故障演练仍属 T11。
+- CI 工作流文件已建立，但因未提交/推送，本轮没有 GitHub Actions 运行证据；Linux runner 与 MariaDB 客户端兼容性仍待远端执行确认。
+- 真实浏览器注册—投稿—转码—互动—治理闭环、故障演练和压测仍按依赖属于 T11/T12，不用当前模拟 E2E 或单次备份测试代替。
+
+## 23. T10/T11 部署与故障验收收口（2026-09-24）
+
+本节是上述按阶段记录之后的最新本地证据；若与旧章节中的“待验证”冲突，以本节和 [final-review.md](final-review.md) 的最终复核为准。没有改写旧记录中的历史状态。
+
+### 23.1 Docker Hub 与镜像
+
+- 用户确认 `docker pull golang:1.26.8-alpine` 成功；Docker 本机镜像 digest 为 `sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c`。
+- 在 `stage5-smoke-20260924` 隔离项目中从当前工作树构建 `api`、`worker`、`ranking-rebuild`、`frontend`，随后显式运行迁移（`applied:0`）并只替换隔离应用容器。开发 Compose、业务数据库和既有卷未被重建或清理。
+
+### 23.2 Outbox 故障路径修复和复测
+
+- `KAFKA_PUBLISH_TIMEOUT_MS` 默认 5000 ms，允许范围 1–120000 ms；超时写入 `last_error` 并沿用指数退避重试。API 每次最多领取 10 条，claim 租约覆盖有界发布的整批最坏时长，防止批次尾部记录在轮到前过期。
+- `go test ./internal/outbox ./internal/config -count=1`、`go test -race ./...`、`go vet ./...` 通过；新增测试覆盖发布截止时间、错误持久化、未来重试时间及 lease 覆盖完整批次时间。
+- `e2e-stage5.ps1 -DrillKafkaOutage -SkipBrowser` 实际停掉隔离 Kafka 后观察到 `status=1`、`attempts=2`、`last_error` 非空；恢复 broker 后该事件为 `status=2`、`attempts=4`、`last_error` 清空，Worker 完成转码。`attempts` 是领取计数而非 Kafka delivery 次数。
+
+### 23.3 Nginx、浏览器和部署边界
+
+- production 与 isolated Nginx 配置都通过 `nginx -t`；`/api/` 使用 Docker DNS resolver `127.0.0.11`、5 秒缓存。占用原 API 地址后重建 API，容器 IP 从 `172.20.0.7` 变为 `172.20.0.10`；保持 Nginx 前端进程不变，等待 resolver 缓存后同源分类接口仍返回 200。
+- 33,000 字节 API 请求返回 413；MinIO 对 `http://127.0.0.1:15173` 的预检返回相应 `Access-Control-Allow-Origin`；CSP 头存在。最终 Stage5 E2E 对 refresh `Set-Cookie` 断言 `HttpOnly`、`SameSite=Lax`，12 个 API 阶段和真实 Playwright 1/1 均通过。
+- 两个 API 进程共同使用隔离 Redis 的登录限流测试：前 10 个交替请求到达 CSRF guard（403），第 11 个跨进程返回 429 并带 `Retry-After`。
+- 仍未发布到公网或 GitHub Actions；HTTPS 域名/CDN、生产数据、长时间稳态和生产容量不在本地实测范围。实现仍处于 dirty `main` 工作区，未提交、合并或推送。

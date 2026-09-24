@@ -9,14 +9,14 @@ services:
       MYSQL_USER: video_share
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-video_share}
     ports:
-      - "3308:3306"
+      - "127.0.0.1:3308:3306"
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p$$MYSQL_ROOT_PASSWORD"]
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_ROOT_PASSWORD\" mysql -h 127.0.0.1 -uroot -N -e 'SELECT 1' >/dev/null 2>&1"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -74,6 +74,32 @@ services:
       retries: 12
       start_period: 30s
 
+  redis:
+    image: redis:7.4.2-alpine
+    container_name: video_share_redis
+    restart: unless-stopped
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        if [ -n "$$REDIS_PASSWORD" ]; then
+          exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD";
+        else
+          exec redis-server --appendonly yes;
+        fi
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "if [ -n \"$$REDIS_PASSWORD\" ]; then redis-cli -a \"$$REDIS_PASSWORD\" ping; else redis-cli ping; fi | grep PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
   kafka-init:
     image: apache/kafka:4.0.0
     depends_on:
@@ -127,15 +153,18 @@ services:
       MINIO_ENDPOINT: minio:9000
       MINIO_PUBLIC_ENDPOINT: 127.0.0.1:9000
       KAFKA_BROKERS: kafka:29092
+      REDIS_ADDR: redis:6379
     ports:
       - "127.0.0.1:8081:8081"
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
       minio:
         condition: service_healthy
       kafka-init:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8081/readyz"]
       interval: 10s
@@ -163,14 +192,55 @@ services:
       FFPROBE_PATH: ffprobe
       TRANSCODE_TEMP_DIR: /tmp/video-share
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
       minio:
         condition: service_healthy
       kafka-init:
         condition: service_completed_successfully
 
+  ranking-rebuild:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: ranking-runtime
+    container_name: video_share_ranking_rebuild
+    profiles: ["demo"]
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      REDIS_ADDR: redis:6379
+      RANKING_REBUILD_ONCE: "0"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ../../frontend
+      dockerfile: Dockerfile
+    container_name: video_share_frontend
+    profiles: ["demo"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5173:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+
 volumes:
   mysql_data:
   minio_data:
   kafka_data:
+  redis_data:

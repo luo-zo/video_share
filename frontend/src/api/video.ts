@@ -44,6 +44,8 @@ export interface VideoSubmissionInput {
   title?: unknown;
   description?: unknown;
   file?: unknown;
+  categoryId?: unknown;
+  tags?: unknown;
 }
 
 export interface VideoSubmissionValues {
@@ -83,12 +85,16 @@ export interface VideoPatchInput {
   title?: unknown;
   description?: unknown;
   visibility?: unknown;
+  categoryId?: unknown;
+  tags?: unknown;
 }
 
 export interface VideoPatchValues {
   title?: string;
   description?: string;
   visibility?: string;
+  category_id?: number;
+  tags?: string[];
 }
 
 // 作者的部分更新：只接受显式提供的字段，未提供的字段保持原值。
@@ -115,6 +121,18 @@ export function validateVideoPatch(
     const visibility = text(source.visibility);
     if (!['public', 'private'].includes(visibility)) errors.visibility = '可见性只能是 public 或 private。';
     else values.visibility = visibility;
+  }
+  if (source.categoryId !== undefined) {
+    const categoryID = Number(source.categoryId);
+    if (!Number.isInteger(categoryID) || categoryID < 1) errors.category_id = '请选择有效分区。';
+    else values.category_id = categoryID;
+  }
+  if (source.tags !== undefined) {
+    if (!Array.isArray(source.tags) || source.tags.length > 5 || source.tags.some((tag) => Array.from(text(tag).trim()).length < 1 || Array.from(text(tag).trim()).length > 20)) {
+      errors.tags = '标签最多 5 个，每个 1–20 个字符。';
+    } else {
+      values.tags = source.tags.map((tag) => text(tag).trim());
+    }
   }
   if (Object.keys(values).length === 0 && Object.keys(errors).length === 0) {
     errors.title = '请至少提供一个要修改的字段。';
@@ -235,6 +253,8 @@ export interface ListVideosOptions {
   page?: unknown;
   pageSize?: unknown;
   signal?: AbortSignal;
+  categoryId?: unknown;
+  tags?: readonly unknown[];
 }
 
 export interface PageOptions {
@@ -264,6 +284,8 @@ export interface VideoClient {
   deleteVideo(id: unknown): Promise<VideoItem>;
   waitUntilProcessed(id: unknown, options?: WaitOptions): Promise<VideoItem>;
   uploadVideo(input: VideoSubmissionInput, options?: UploadOptions): Promise<VideoItem>;
+  listFollowing(options?: ListVideosOptions): Promise<VideoList>;
+  listRelated(id: unknown, options?: { signal?: AbortSignal }): Promise<VideoList>;
 }
 
 export function createVideoClient({
@@ -304,7 +326,7 @@ export function createVideoClient({
     return `${path}?${query}`;
   };
 
-  const discoveryPath = ({ query, sort, page, pageSize }: ListVideosOptions = {}): string => {
+  const discoveryPath = ({ query, sort, page, pageSize, categoryId, tags }: ListVideosOptions = {}, base = '/videos'): string => {
     const params = new URLSearchParams();
     const keyword = text(query).trim();
     if (keyword) params.set('q', keyword);
@@ -312,7 +334,13 @@ export function createVideoClient({
     if (order) params.set('sort', order);
     params.set('page', String(positiveInteger(page, 1)));
     params.set('page_size', String(positiveInteger(pageSize, DEFAULT_PAGE_SIZE)));
-    return `/videos?${params}`;
+    const category = positiveInteger(categoryId, 0);
+    if (category > 0) params.set('category_id', String(category));
+    for (const tag of tags ?? []) {
+      const value = text(tag).trim();
+      if (value) params.append('tag', value);
+    }
+    return `${base}?${params}`;
   };
 
   const checkedID = (id: unknown): string => {
@@ -327,8 +355,16 @@ export function createVideoClient({
   );
 
   return {
-    async listVideos({ query, sort, page = 1, pageSize = DEFAULT_PAGE_SIZE, signal }: ListVideosOptions = {}): Promise<VideoList> {
-      return listFrom(await session.requestPublic(discoveryPath({ query, sort, page, pageSize }), { signal }));
+    async listVideos(options: ListVideosOptions = {}): Promise<VideoList> {
+      return listFrom(await session.requestPublic(discoveryPath(options), { signal: options.signal }));
+    },
+
+    async listFollowing(options: ListVideosOptions = {}): Promise<VideoList> {
+      return listFrom(await session.requestWithSession(discoveryPath(options, '/feed/following'), { signal: options.signal }));
+    },
+
+    async listRelated(id: unknown, { signal }: { signal?: AbortSignal } = {}): Promise<VideoList> {
+      return listFrom(await session.requestPublic(`/videos/${checkedID(id)}/related`, { signal }));
     },
 
     async getVideo(id: unknown, { signal }: { signal?: AbortSignal } = {}): Promise<VideoItem> {
@@ -399,6 +435,11 @@ export function createVideoClient({
         });
       }
       const contentType = text(file.type).toLowerCase() || 'video/mp4';
+      const categoryID = Number((input as Record<string, unknown>).categoryId);
+      const rawTags = (input as Record<string, unknown>).tags;
+      const tags = Array.isArray(rawTags)
+        ? rawTags.map((tag) => text(tag).trim()).filter(Boolean)
+        : text(rawTags).split(',').map((tag) => tag.trim()).filter(Boolean);
 
       onStep('creating');
       const created = videoFrom(await session.requestWithSession('/videos', {
@@ -409,6 +450,8 @@ export function createVideoClient({
           file_name: file.name,
           content_type: contentType,
           file_size: file.size,
+          ...(Number.isInteger(categoryID) && categoryID > 0 ? { category_id: categoryID } : {}),
+          ...(tags.length > 0 ? { tags } : {}),
         },
         signal,
       }));

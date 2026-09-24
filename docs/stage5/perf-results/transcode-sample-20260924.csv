@@ -1,0 +1,2 @@
+date,compose_project,video_id,fixture_duration_ms,width,height,worker_id,attempts,job_enqueue_to_claim_ms,claim_to_succeeded_ms,enqueue_to_succeeded_ms,measurement_note
+2026-09-24,stage5-smoke-20260924,28,8000,640,360,docker-worker-1,1,706,855,1561,"Job timestamps from the isolated synthetic T11 duplicate-replay fixture; claim-to-succeeded includes source download, probe, FFmpeg/HLS output, and MinIO upload; not FFmpeg-only time."

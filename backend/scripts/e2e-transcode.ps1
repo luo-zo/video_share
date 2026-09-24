@@ -1,11 +1,14 @@
 ﻿param(
     [string]$BaseUrl = "http://127.0.0.1:8081",
+    [string]$AppOrigin = "http://127.0.0.1:5173",
     [int]$TimeoutSeconds = 180
 )
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $tempVideo = Join-Path ([IO.Path]::GetTempPath()) ("video-share-e2e-{0}.mp4" -f [guid]::NewGuid().ToString("N"))
+$videoID = [uint64]0
+$headers = $null
 
 function Resolve-ApiUrl([string]$Value) {
     if ([Uri]::IsWellFormedUriString($Value, [UriKind]::Absolute)) {
@@ -51,8 +54,11 @@ try {
     $password = ([guid]::NewGuid().ToString("N") + "Aa1!")
     $registerBody = @{ username = $username; password = $password; nickname = "Stage 3 E2E" } | ConvertTo-Json
     Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/auth/register" -ContentType "application/json" -Body $registerBody | Out-Null
+    $webSession = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+    $csrf = Invoke-RestMethod -Uri "$BaseUrl/api/v1/auth/csrf" -WebSession $webSession -UseBasicParsing
     $loginBody = @{ username = $username; password = $password } | ConvertTo-Json
-    $login = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/auth/login" -ContentType "application/json" -Body $loginBody
+    $loginHeaders = @{ Origin = $AppOrigin; "X-CSRF-Token" = $csrf.data.csrf_token }
+    $login = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/auth/login" -Headers $loginHeaders -WebSession $webSession -ContentType "application/json; charset=utf-8" -Body $loginBody -UseBasicParsing
     $headers = @{ Authorization = "Bearer $($login.data.access_token)" }
 
     Write-Host "[4/8] Creating a submission and uploading directly to MinIO..."
@@ -110,5 +116,13 @@ try {
     Write-Host "[8/8] Stage 3 E2E passed."
     Write-Host ("      video_id={0}, resolution={1}x{2}, duration_ms={3}" -f $videoID, $detail.data.width, $detail.data.height, $detail.data.duration_ms)
 } finally {
+    if ($videoID -gt 0 -and $null -ne $headers) {
+        try {
+            Invoke-RestMethod -Method Delete -Uri "$BaseUrl/api/v1/users/me/videos/$videoID" -Headers $headers -UseBasicParsing | Out-Null
+            Write-Host "      Soft-deleted only the synthetic E2E video_id=$videoID."
+        } catch {
+            Write-Warning ("Could not soft-delete synthetic video {0}: {1}" -f $videoID, $_.Exception.Message)
+        }
+    }
     Remove-Item -LiteralPath $tempVideo -Force -ErrorAction SilentlyContinue
 }

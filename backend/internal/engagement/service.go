@@ -18,6 +18,10 @@ type Service struct {
 	repo Repository
 }
 
+type threadedCommentRepository interface {
+	CreateCommentWithRequest(ctx context.Context, userID, videoID uint64, content string, parentID *uint64, requestID string) (*Comment, error)
+}
+
 func NewService(repo Repository) *Service {
 	return &Service{repo: repo}
 }
@@ -46,6 +50,10 @@ func (s *Service) setRelation(ctx context.Context, userID, videoID uint64, activ
 // CreateComment 校验并规整评论内容，再去重首尾空白后写入。内容长度按字符计数，
 // 允许 1 到 500 个字符。
 func (s *Service) CreateComment(ctx context.Context, userID, videoID uint64, content string) (*CommentResponse, error) {
+	return s.CreateCommentWithRequest(ctx, userID, videoID, content, nil, "")
+}
+
+func (s *Service) CreateCommentWithRequest(ctx context.Context, userID, videoID uint64, content string, parentID *uint64, requestID string) (*CommentResponse, error) {
 	if userID == 0 {
 		return nil, ErrUnauthorized
 	}
@@ -56,12 +64,41 @@ func (s *Service) CreateComment(ctx context.Context, userID, videoID uint64, con
 	if n := utf8.RuneCountInString(trimmed); n == 0 || n > maxCommentRunes {
 		return nil, ErrContentInvalid
 	}
-	comment, err := s.repo.CreateComment(ctx, userID, videoID, trimmed)
+	if parentID != nil && *parentID == 0 {
+		return nil, ErrParentCommentInvalid
+	}
+	var comment *Comment
+	var err error
+	if threaded, ok := s.repo.(threadedCommentRepository); ok {
+		comment, err = threaded.CreateCommentWithRequest(ctx, userID, videoID, trimmed, parentID, requestID)
+	} else if parentID != nil || requestID != "" {
+		return nil, ErrParentCommentInvalid
+	} else {
+		comment, err = s.repo.CreateComment(ctx, userID, videoID, trimmed)
+	}
 	if err != nil {
 		return nil, err
 	}
 	result := toCommentResponse(comment)
 	return &result, nil
+}
+
+func (s *Service) ListReplies(ctx context.Context, commentID uint64, page, pageSize int) (*CommentListResponse, error) {
+	if commentID == 0 {
+		return nil, ErrCommentNotFound
+	}
+	if err := validatePagination(page, pageSize); err != nil {
+		return nil, err
+	}
+	comments, total, err := s.repo.ListReplies(ctx, commentID, page, pageSize)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]CommentResponse, 0, len(comments))
+	for i := range comments {
+		items = append(items, toCommentResponse(&comments[i]))
+	}
+	return &CommentListResponse{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
 }
 
 func (s *Service) ListComments(ctx context.Context, videoID uint64, page, pageSize int) (*CommentListResponse, error) {

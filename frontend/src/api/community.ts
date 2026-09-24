@@ -34,6 +34,8 @@ export class CommunityError extends Error {
 
 export interface CommentInput {
   content?: unknown;
+  parentId?: unknown;
+  requestId?: unknown;
 }
 
 export interface CommentValues {
@@ -64,6 +66,10 @@ export interface CommentAuthor {
 
 export interface CommentItem extends Identified {
   readonly content: string;
+  readonly user_id?: string | number;
+  readonly parent_id?: string | number;
+  readonly root_id?: string | number;
+  readonly deleted?: boolean;
   readonly created_at?: string;
   readonly author?: CommentAuthor;
 }
@@ -186,6 +192,7 @@ export interface WatchReportOptions {
 
 export interface CommunityClient {
   listComments(id: unknown, options?: PageOptions): Promise<CommunityList<CommentItem>>;
+  listReplies(id: unknown, options?: PageOptions): Promise<CommunityList<CommentItem>>;
   addComment(id: unknown, input: CommentInput): Promise<CommentItem>;
   deleteComment(id: unknown): Promise<Identified>;
   setLike(id: unknown, active: boolean): Promise<Relation>;
@@ -227,6 +234,13 @@ export function createCommunityClient({ authClient }: CommunityClientOptions = {
       ));
     },
 
+    async listReplies(id: unknown, { page = 1, pageSize = DEFAULT_PAGE_SIZE, signal }: PageOptions = {}): Promise<CommunityList<CommentItem>> {
+      return listFrom<CommentItem>(await session.requestPublic(
+        pagePath(`/comments/${checkedID(id, '评论编号')}/replies`, page, pageSize),
+        { signal },
+      ));
+    },
+
     async addComment(id: unknown, input: CommentInput): Promise<CommentItem> {
       const validation = validateComment(input);
       if (!validation.valid) {
@@ -235,9 +249,18 @@ export function createCommunityClient({ authClient }: CommunityClientOptions = {
           fieldErrors: validation.errors,
         });
       }
+      const source = (input ?? {}) as Record<string, unknown>;
+      const rawParent = source.parentId;
+      const parentID = rawParent === undefined || rawParent === null || rawParent === '' ? undefined : Number(rawParent);
+      if (parentID !== undefined && (!Number.isInteger(parentID) || parentID < 1)) {
+        throw new CommunityError('回复目标无效。', { code: 'INVALID_PARAMETER', fieldErrors: { parent_id: '回复目标无效。' } });
+      }
+      const requestID = typeof source.requestId === 'string' && source.requestId.trim() ? source.requestId.trim() : (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `comment-${Date.now()}-${Math.random().toString(16).slice(2)}`);
       return commentFrom(await session.requestWithSession(`/videos/${videoID(id)}/comments`, {
         method: 'POST',
-        body: { content: validation.values.content },
+        body: { content: validation.values.content, ...(parentID === undefined ? {} : { parent_id: parentID }), request_id: requestID },
+        withCredentials: true,
+        csrf: true,
       }));
     },
 
@@ -283,7 +306,13 @@ export function createCommunityClient({ authClient }: CommunityClientOptions = {
     },
 
     async setFollow(id: unknown, active: boolean): Promise<FollowState> {
-      return followFrom(await setRelation(`/users/${userID(id)}/follow`, active));
+      const requestID = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `follow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      return followFrom(await session.requestWithSession(`/users/${userID(id)}/follow`, {
+        method: active ? 'PUT' : 'DELETE',
+        headers: { 'Idempotency-Key': requestID },
+        withCredentials: true,
+        csrf: true,
+      }));
     },
   };
 }

@@ -29,6 +29,7 @@ var (
 	ErrUsernameTaken      = errors.New("username already taken")
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrAccountDisabled    = errors.New("account disabled")
+	ErrBioInvalid         = errors.New("invalid bio")
 )
 
 var usernameRe = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
@@ -77,33 +78,71 @@ func (s *Service) Register(ctx context.Context, username, password, nickname str
 }
 
 func (s *Service) Login(ctx context.Context, username, password string) (*User, string, time.Duration, error) {
-	username = strings.ToLower(strings.TrimSpace(username))
-	if username == "" {
-		return nil, "", 0, ErrInvalidCredentials
-	}
-
-	u, err := s.repo.FindByUsername(ctx, username)
+	u, err := s.Authenticate(ctx, username, password)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, "", 0, ErrInvalidCredentials
-		}
 		return nil, "", 0, err
 	}
-
-	// 禁用用户无法登录；返回相同的通用错误以避免账号枚举。
-	if u.Status != StatusNormal {
-		return nil, "", 0, ErrInvalidCredentials
-	}
-
-	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)); err != nil {
-		return nil, "", 0, ErrInvalidCredentials
-	}
-
 	tokenStr, ttl, err := s.token.Generate(u.ID)
 	if err != nil {
 		return nil, "", 0, err
 	}
 	return u, tokenStr, ttl, nil
+}
+
+// Authenticate verifies credentials without creating a legacy access token;
+// the session package issues the sid-bound token after creating a family.
+func (s *Service) Authenticate(ctx context.Context, username, password string) (*User, error) {
+	username = strings.ToLower(strings.TrimSpace(username))
+	if username == "" {
+		return nil, ErrInvalidCredentials
+	}
+	u, err := s.repo.FindByUsername(ctx, username)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrInvalidCredentials
+		}
+		return nil, err
+	}
+	if u.Status != StatusNormal || bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
+		return nil, ErrInvalidCredentials
+	}
+	return u, nil
+}
+
+func (s *Service) UpdateProfile(ctx context.Context, userID uint64, nickname, bio string) (*User, error) {
+	if userID == 0 {
+		return nil, ErrNotFound
+	}
+	nickname = strings.TrimSpace(nickname)
+	bio = strings.TrimSpace(bio)
+	if err := validateNickname(nickname); err != nil {
+		return nil, err
+	}
+	if utf8.RuneCountInString(bio) > 200 {
+		return nil, ErrBioInvalid
+	}
+	return s.repo.UpdateProfile(ctx, userID, nickname, bio)
+}
+
+func (s *Service) ChangePassword(ctx context.Context, userID uint64, oldPassword, newPassword string) error {
+	if userID == 0 {
+		return ErrInvalidCredentials
+	}
+	if err := validatePassword(newPassword); err != nil {
+		return err
+	}
+	u, err := s.repo.FindByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if u.Status != StatusNormal || bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(oldPassword)) != nil {
+		return ErrInvalidCredentials
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+	return s.repo.ChangePasswordAndRevokeSessions(ctx, userID, string(hash), time.Now().UTC())
 }
 
 func (s *Service) GetByID(ctx context.Context, id uint64) (*User, error) {

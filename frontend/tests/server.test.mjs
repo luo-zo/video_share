@@ -121,6 +121,11 @@ test('proxies allowlisted video routes, methods, auth and pagination queries', a
   const origin = await listen(createFrontendServer({ rootDir, apiTarget }), t);
 
   assert.equal((await rawRequest(origin, '/api/v1/videos?page=2&page_size=12')).status, 200);
+  assert.equal((await rawRequest(origin, '/api/v1/categories')).status, 200);
+  assert.equal((await rawRequest(origin, '/api/v1/videos/7/related')).status, 200);
+  assert.equal((await rawRequest(origin, '/api/v1/feed/following?page=1', {
+    headers: { Authorization: 'Bearer test-token' },
+  })).status, 200);
   assert.equal((await rawRequest(origin, '/api/v1/videos/7')).status, 200);
   assert.equal((await rawRequest(origin, '/api/v1/users/me/videos?page=1', {
     headers: { Authorization: 'Bearer test-token' },
@@ -128,6 +133,10 @@ test('proxies allowlisted video routes, methods, auth and pagination queries', a
   assert.equal((await rawRequest(origin, '/api/v1/users/me/videos/7', {
     headers: { Authorization: 'Bearer test-token' },
   })).status, 200);
+  assert.equal((await rawRequest(origin, '/api/v1/users/7')).status, 200);
+  assert.equal((await rawRequest(origin, '/api/v1/users/7/videos?page=1')).status, 200);
+  assert.equal((await rawRequest(origin, '/api/v1/users/7/followers?page=1')).status, 200);
+  assert.equal((await rawRequest(origin, '/api/v1/users/7/follows?page=1')).status, 200);
   assert.equal((await rawRequest(origin, '/api/v1/videos/7/hls/master.m3u8')).status, 200);
   assert.equal((await rawRequest(origin, '/api/v1/videos/7/cover')).status, 200);
   assert.equal((await rawRequest(origin, '/api/v1/videos', {
@@ -141,17 +150,26 @@ test('proxies allowlisted video routes, methods, auth and pagination queries', a
 
   assert.deepEqual(seen.map(({ method, url }) => `${method} ${url}`), [
     'GET /api/v1/videos?page=2&page_size=12',
+    'GET /api/v1/categories',
+    'GET /api/v1/videos/7/related',
+    'GET /api/v1/feed/following?page=1',
     'GET /api/v1/videos/7',
     'GET /api/v1/users/me/videos?page=1',
     'GET /api/v1/users/me/videos/7',
+    'GET /api/v1/users/7',
+    'GET /api/v1/users/7/videos?page=1',
+    'GET /api/v1/users/7/followers?page=1',
+    'GET /api/v1/users/7/follows?page=1',
     'GET /api/v1/videos/7/hls/master.m3u8',
     'GET /api/v1/videos/7/cover',
     'POST /api/v1/videos',
     'POST /api/v1/videos/7/complete',
   ]);
-  assert.equal(seen[2].auth, 'Bearer test-token');
-  assert.equal(seen[3].auth, 'Bearer test-token');
+  assert.equal(seen[5].auth, 'Bearer test-token');
   assert.equal(seen[6].auth, 'Bearer test-token');
+  assert.equal(seen[3].auth, 'Bearer test-token');
+  for (const index of [1, 2, 4, 7, 8, 9, 10, 11, 12]) assert.equal(seen[index].auth, undefined);
+  assert.equal(seen[13].auth, 'Bearer test-token');
   assert.equal((await rawRequest(origin, '/api/v1/videos/7', { method: 'DELETE' })).status, 405);
   assert.equal((await rawRequest(origin, '/api/v1/videos/not-a-number')).status, 404);
   assert.equal((await rawRequest(origin, '/api/v1/videos/7/hls/../secret.ts')).status, 404);
@@ -178,8 +196,10 @@ test('proxies community routes with their exact methods and bearer tokens', asyn
     headers: { 'Content-Type': 'application/json', Origin: origin, Authorization: 'Bearer test-token' },
     body: '{}',
   });
+  const authed = { headers: { Authorization: 'Bearer test-token' } };
 
   assert.equal((await rawRequest(origin, '/api/v1/videos/9/comments?page=1')).status, 200);
+  assert.equal((await rawRequest(origin, '/api/v1/comments/3/replies?page=1', authed)).status, 200);
   assert.equal((await json('POST', '/api/v1/videos/9/comments')).status, 200);
   assert.equal((await json('DELETE', '/api/v1/comments/11')).status, 200);
   assert.equal((await json('PUT', '/api/v1/videos/9/like')).status, 200);
@@ -189,15 +209,18 @@ test('proxies community routes with their exact methods and bearer tokens', asyn
   assert.equal((await json('POST', '/api/v1/videos/9/watch')).status, 200);
   assert.equal((await json('PATCH', '/api/v1/users/me/videos/5')).status, 200);
   assert.equal((await json('DELETE', '/api/v1/users/me/videos/5')).status, 200);
-  const authed = { headers: { Authorization: 'Bearer test-token' } };
   assert.equal((await rawRequest(origin, '/api/v1/users/me/favorites?page=2', authed)).status, 200);
   assert.equal((await rawRequest(origin, '/api/v1/users/me/history', authed)).status, 200);
   assert.equal((await rawRequest(origin, '/api/v1/users/me/follows', authed)).status, 200);
   assert.equal((await json('PUT', '/api/v1/users/4/follow')).status, 200);
   assert.equal((await json('DELETE', '/api/v1/users/4/follow')).status, 200);
+  assert.equal((await rawRequest(origin, '/api/v1/notifications', authed)).status, 200);
+  assert.equal((await json('PATCH', '/api/v1/notifications/8/read')).status, 200);
+  assert.equal((await json('POST', '/api/v1/notifications/read-all')).status, 200);
 
   assert.deepEqual(seen.map(({ method, url }) => `${method} ${url}`), [
     'GET /api/v1/videos/9/comments?page=1',
+    'GET /api/v1/comments/3/replies?page=1',
     'POST /api/v1/videos/9/comments',
     'DELETE /api/v1/comments/11',
     'PUT /api/v1/videos/9/like',
@@ -212,6 +235,9 @@ test('proxies community routes with their exact methods and bearer tokens', asyn
     'GET /api/v1/users/me/follows',
     'PUT /api/v1/users/4/follow',
     'DELETE /api/v1/users/4/follow',
+    'GET /api/v1/notifications',
+    'PATCH /api/v1/notifications/8/read',
+    'POST /api/v1/notifications/read-all',
   ]);
   for (const request of seen.slice(1)) {
     assert.equal(request.auth, 'Bearer test-token');
@@ -282,6 +308,9 @@ test('proxies auth JSON, Bearer credentials and upstream error status/body', asy
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
     seen.push({ route: request.url, headers: request.headers, body: Buffer.concat(chunks).toString() });
+    if (request.url === '/api/v1/auth/csrf') {
+      response.setHeader('Set-Cookie', ['video_share_csrf=csrf-from-api; Path=/', 'csrf_marker=1; Path=/']);
+    }
     response.writeHead(request.url === '/api/v1/auth/login' ? 401 : 200, { 'Content-Type': 'application/json' });
     response.end(request.url === '/api/v1/auth/login'
       ? '{"error":{"code":"INVALID_CREDENTIALS","message":"Incorrect password"}}'
@@ -303,6 +332,34 @@ test('proxies auth JSON, Bearer credentials and upstream error status/body', asy
   assert.deepEqual(JSON.parse(profile.body), { data: { id: 7 } });
   assert.equal(seen[1].headers.authorization, 'Bearer test-token');
   assert.equal(profile.headers['cache-control'], 'no-store');
+  for (const [route, method] of [
+    ['/api/v1/auth/csrf', 'GET'],
+    ['/api/v1/auth/refresh', 'POST'],
+    ['/api/v1/auth/logout', 'POST'],
+    ['/api/v1/users/me', 'PATCH'],
+    ['/api/v1/users/me/change-password', 'POST'],
+  ]) {
+    const response = await rawRequest(origin, route, {
+      method,
+      headers: method === 'GET' ? { Authorization: 'Bearer test-token' } : {
+        Authorization: 'Bearer test-token',
+        Origin: origin,
+        'Content-Type': 'application/json',
+        Cookie: 'video_share_csrf=csrf-from-browser',
+        'X-CSRF-Token': 'csrf-from-browser',
+      },
+      ...(method === 'GET' ? {} : { body: '{}' }),
+    });
+    assert.equal(response.status, 200, `${method} ${route}`);
+  }
+  const csrfResponse = await rawRequest(origin, '/api/v1/auth/csrf', {
+    headers: { Cookie: 'video_share_csrf=old-token' },
+  });
+  assert.deepEqual(csrfResponse.headers['set-cookie'], ['video_share_csrf=csrf-from-api; Path=/', 'csrf_marker=1; Path=/']);
+  const refreshCall = seen.find((entry) => entry.route === '/api/v1/auth/refresh');
+  assert.equal(refreshCall.headers.cookie, 'video_share_csrf=csrf-from-browser');
+  assert.equal(refreshCall.headers.origin, origin);
+  assert.equal(refreshCall.headers['x-csrf-token'], 'csrf-from-browser');
   assert.equal((await rawRequest(origin, '/api/v1/auth/register', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
   })).status, 200);

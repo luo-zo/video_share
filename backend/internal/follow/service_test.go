@@ -7,8 +7,9 @@ import (
 )
 
 type mockRepository struct {
-	setFollowFn   func(context.Context, uint64, uint64, bool) (*FollowState, error)
-	listFollowsFn func(context.Context, uint64, int, int) ([]FollowedUser, int64, error)
+	setFollowFn     func(context.Context, uint64, uint64, bool) (*FollowState, error)
+	listFollowsFn   func(context.Context, uint64, int, int) ([]FollowedUser, int64, error)
+	listFollowersFn func(context.Context, uint64, int, int) ([]FollowedUser, int64, error)
 }
 
 func (m *mockRepository) SetFollow(ctx context.Context, followerID, followeeID uint64, active bool) (*FollowState, error) {
@@ -23,6 +24,17 @@ func (m *mockRepository) ListFollows(ctx context.Context, followerID uint64, pag
 		return nil, 0, nil
 	}
 	return m.listFollowsFn(ctx, followerID, page, pageSize)
+}
+
+func (m *mockRepository) ListFollowing(ctx context.Context, followerID uint64, page, pageSize int) ([]FollowedUser, int64, error) {
+	return m.ListFollows(ctx, followerID, page, pageSize)
+}
+
+func (m *mockRepository) ListFollowers(ctx context.Context, followeeID uint64, page, pageSize int) ([]FollowedUser, int64, error) {
+	if m.listFollowersFn == nil {
+		return nil, 0, nil
+	}
+	return m.listFollowersFn(ctx, followeeID, page, pageSize)
 }
 
 func TestFollowRejectsMissingUserTargetAndSelfFollow(t *testing.T) {

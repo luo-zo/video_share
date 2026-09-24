@@ -2,12 +2,14 @@
 import { nextTick, onMounted, onUnmounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 
-import { videoClient } from '../api';
+import { taxonomyClient, videoClient } from '../api';
+import type { Category } from '../api/taxonomy';
 import { VideoError, validateVideoSubmission } from '../api/video';
 import type { UploadStep } from '../api/video';
 
 const router = useRouter();
-const form = reactive<{ title: string; description: string; file: File | null }>({ title: '', description: '', file: null });
+const form = reactive<{ title: string; description: string; file: File | null; categoryId: string; tags: string }>({ title: '', description: '', file: null, categoryId: '1', tags: '' });
+const categories = ref<readonly Category[]>([]);
 const errors = reactive<Record<string, string>>({});
 const message = ref('');
 const busy = ref(false);
@@ -81,6 +83,14 @@ async function submit(): Promise<void> {
 }
 
 onMounted(() => void nextTick(() => heading.value?.focus()));
+onMounted(() => {
+  if (taxonomyClient && typeof taxonomyClient.listCategories === 'function') {
+    const request = taxonomyClient.listCategories();
+    if (request && typeof (request as Promise<unknown>).then === 'function') {
+      void request.then((result) => { categories.value = result.items; }).catch(() => { categories.value = []; });
+    }
+  }
+});
 onUnmounted(() => operation?.abort());
 </script>
 
@@ -92,6 +102,8 @@ onUnmounted(() => operation?.abort());
         <div class="upload-fields">
           <div class="field-group" :class="{ 'is-invalid': errors.title }"><label for="upload-title-input">标题 <span>1–100 个字符</span></label><input id="upload-title-input" ref="titleInput" v-model="form.title" name="title" type="text" maxlength="100"><p class="field-error">{{ errors.title }}</p></div>
           <div class="field-group" :class="{ 'is-invalid': errors.description }"><label for="upload-description">简介 <span>最多 2000 个字符</span></label><textarea id="upload-description" ref="descriptionInput" v-model="form.description" name="description" maxlength="2000"></textarea><p class="field-error">{{ errors.description }}</p></div>
+          <div class="field-group"><label for="upload-category">分区</label><select id="upload-category" v-model="form.categoryId" name="category_id"><option v-for="category in categories" :key="category.id" :value="String(category.id)">{{ category.name }}</option></select></div>
+          <div class="field-group"><label for="upload-tags">标签 <span>最多 5 个，用逗号分隔</span></label><input id="upload-tags" v-model="form.tags" name="tags" maxlength="120" placeholder="例如：旅行, 猫咪"></div>
           <div class="field-group" :class="{ 'is-invalid': errors.file }"><label for="upload-file">视频文件</label><label class="file-picker" for="upload-file"><input id="upload-file" ref="fileInput" name="file" type="file" accept="video/mp4,.mp4" @change="selectFile"><span>选择 MP4</span><strong>{{ form.file?.name || '尚未选择文件' }}</strong></label><p class="field-error">{{ errors.file }}</p></div>
           <p v-if="message" class="form-message is-error" role="alert">{{ message }}</p>
         </div>

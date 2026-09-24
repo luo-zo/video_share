@@ -32,12 +32,19 @@ export function safeReturnTo(value: unknown, fallback = '/'): string {
 
 const routes: RouteRecordRaw[] = [
   { path: '/', name: 'discover', component: () => import('../views/DiscoverView.vue') },
+  { path: '/following', name: 'following', component: () => import('../views/FollowingView.vue'), meta: { requiresSession: true } },
+  { path: '/ranking', name: 'ranking', component: () => import('../views/RankingView.vue') },
   { path: '/login', name: 'login', component: () => import('../views/LoginView.vue') },
   {
     path: '/video/:id',
     name: 'video-detail',
     component: () => import('../views/VideoDetailView.vue'),
     props: true,
+  },
+  {
+    path: '/creator/:id',
+    name: 'creator',
+    component: () => import('../views/CreatorView.vue'),
   },
   {
     path: '/upload',
@@ -49,6 +56,42 @@ const routes: RouteRecordRaw[] = [
     path: '/me',
     name: 'profile',
     component: () => import('../views/ProfileView.vue'),
+    meta: { requiresSession: true },
+  },
+  {
+    path: '/settings',
+    name: 'settings',
+    component: () => import('../views/SettingsView.vue'),
+    meta: { requiresSession: true },
+  },
+  {
+    path: '/notifications',
+    name: 'notifications',
+    component: () => import('../views/NotificationsView.vue'),
+    meta: { requiresSession: true },
+  },
+  {
+    path: '/reports',
+    name: 'reports',
+    component: () => import('../views/ReportsView.vue'),
+    meta: { requiresSession: true },
+  },
+  {
+    path: '/admin/reports',
+    name: 'admin-reports',
+    component: () => import('../views/AdminReportsView.vue'),
+    meta: { requiresSession: true },
+  },
+  {
+    path: '/admin/audit',
+    name: 'admin-audit',
+    component: () => import('../views/AuditView.vue'),
+    meta: { requiresSession: true },
+  },
+  {
+    path: '/creator-center',
+    name: 'creator-center',
+    component: () => import('../views/CreatorDashboardView.vue'),
     meta: { requiresSession: true },
   },
   { path: '/:pathMatch(.*)*', name: 'not-found', redirect: { name: 'discover' } },

@@ -16,6 +16,7 @@
     "test:legacy": "node --test tests/auth.test.mjs tests/video.test.mjs tests/community.test.mjs tests/player.test.mjs tests/discover-view.test.mjs tests/detail-view.test.mjs tests/profile-view.test.mjs tests/server.test.mjs",
     "test": "npm run test:unit && npm run test:legacy",
     "test:e2e": "playwright test",
+    "test:e2e:stage5": "playwright test --config playwright.stage5.config.ts",
     "legacy:serve": "node server.mjs"
   },
   "dependencies": {
@@ -32,7 +33,7 @@
     "jsdom": "26.1.0",
     "typescript": "5.9.3",
     "vite": "7.3.6",
-    "vitest": "3.2.7",
+    "vitest": "4.1.11",
     "vue-tsc": "3.0.11"
   }
 }

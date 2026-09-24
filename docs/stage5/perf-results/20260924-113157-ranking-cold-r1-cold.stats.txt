@@ -1,0 +1,29 @@
+[Hstage5-smoke-20260924-api-1|0.05%|11.19MiB / 15.28GiB[K
+stage5-smoke-20260924-mysql-1|0.04%|383.5MiB / 15.28GiB[K
+stage5-smoke-20260924-redis-1|0.03%|3.988MiB / 15.28GiB[K
+[K
+[J[Hstage5-smoke-20260924-api-1|0.05%|11.19MiB / 15.28GiB[K
+stage5-smoke-20260924-mysql-1|0.04%|383.5MiB / 15.28GiB[K
+stage5-smoke-20260924-redis-1|0.03%|3.988MiB / 15.28GiB[K
+[K
+[J[Hstage5-smoke-20260924-api-1|0.19%|11.19MiB / 15.28GiB[K
+stage5-smoke-20260924-mysql-1|7.62%|383.3MiB / 15.28GiB[K
+stage5-smoke-20260924-redis-1|4.49%|3.738MiB / 15.28GiB[K
+[K
+[J[Hstage5-smoke-20260924-api-1|0.19%|11.19MiB / 15.28GiB[K
+stage5-smoke-20260924-mysql-1|7.62%|383.3MiB / 15.28GiB[K
+stage5-smoke-20260924-redis-1|4.49%|3.738MiB / 15.28GiB[K
+[K
+[J[Hstage5-smoke-20260924-api-1|0.70%|11.19MiB / 15.28GiB[K
+stage5-smoke-20260924-mysql-1|6.20%|383.3MiB / 15.28GiB[K
+stage5-smoke-20260924-redis-1|0.52%|3.738MiB / 15.28GiB[K
+[K
+[J[Hstage5-smoke-20260924-api-1|0.70%|11.19MiB / 15.28GiB[K
+stage5-smoke-20260924-mysql-1|6.20%|383.3MiB / 15.28GiB[K
+stage5-smoke-20260924-redis-1|0.52%|3.738MiB / 15.28GiB[K
+[K
+[J[Hstage5-smoke-20260924-api-1|0.25%|11.19MiB / 15.28GiB[K
+stage5-smoke-20260924-mysql-1|1.53%|383.3MiB / 15.28GiB[K
+stage5-smoke-20260924-redis-1|4.75%|3.738MiB / 15.28GiB[K
+[K
+[J

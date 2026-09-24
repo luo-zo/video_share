@@ -14,7 +14,9 @@ type RelationState struct {
 }
 
 type CommentRequest struct {
-	Content string `json:"content"`
+	Content   string  `json:"content"`
+	ParentID  *uint64 `json:"parent_id"`
+	RequestID string  `json:"request_id"`
 }
 
 type WatchRequest struct {
@@ -26,7 +28,10 @@ type CommentResponse struct {
 	ID        uint64                `json:"id"`
 	VideoID   uint64                `json:"video_id"`
 	UserID    uint64                `json:"user_id"`
+	ParentID  *uint64               `json:"parent_id,omitempty"`
+	RootID    *uint64               `json:"root_id,omitempty"`
 	Content   string                `json:"content"`
+	Deleted   bool                  `json:"deleted,omitempty"`
 	Author    *video.AuthorResponse `json:"author,omitempty"`
 	CreatedAt time.Time             `json:"created_at"`
 }
@@ -43,8 +48,14 @@ func toCommentResponse(c *Comment) CommentResponse {
 		ID:        c.ID,
 		VideoID:   c.VideoID,
 		UserID:    c.UserID,
+		ParentID:  c.ParentID,
+		RootID:    c.RootID,
 		Content:   c.Content,
+		Deleted:   c.DeletedAt != nil,
 		CreatedAt: c.CreatedAt,
+	}
+	if c.DeletedAt != nil {
+		result.Content = "评论已删除"
 	}
 	if c.Author.ID != 0 {
 		result.Author = &video.AuthorResponse{

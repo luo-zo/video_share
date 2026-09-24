@@ -1,0 +1,117 @@
+name: video-share CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: 22.22.3
+  GO_VERSION: '1.26.8'
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm audit --audit-level=moderate
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  browser-e2e:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+
+  backend-unit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: backend/go.sum
+      - run: go test ./... -count=1
+      - run: go test -race ./... -count=1
+      - run: go vet ./...
+      - run: go build ./cmd/api ./cmd/worker ./cmd/ranking-rebuild
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
+  backend-integration:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: backend/go.sum
+      - name: Install media tools
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg default-mysql-client
+      - name: Prepare non-secret integration environment
+        shell: bash
+        run: |
+          cp .env.example .env
+          sed -i 's/^JWT_SECRET=.*/JWT_SECRET=ci-only-not-used-by-integration/' .env
+      - name: Start real dependencies
+        run: docker compose --env-file .env -f deploy/docker-compose.yml up -d --wait mysql redis kafka minio
+      - name: Create Kafka topic
+        run: docker compose --env-file .env -f deploy/docker-compose.yml run --rm --no-deps kafka-init
+      - name: Wait for dependencies
+        shell: bash
+        run: |
+          for attempt in {1..30}; do
+            status="$(docker compose --env-file .env -f deploy/docker-compose.yml ps --status running --services)"
+            if grep -qx mysql <<<"$status" && grep -qx redis <<<"$status" && grep -qx kafka <<<"$status"; then exit 0; fi
+            sleep 2
+          done
+          docker compose --env-file .env -f deploy/docker-compose.yml ps
+          exit 1
+      - name: Run integration tests with required dependencies
+        shell: bash
+        env:
+          TEST_MYSQL_DSN: 'root:root@tcp(127.0.0.1:3308)/mysql?parseTime=true&charset=utf8mb4'
+          TEST_KAFKA_BROKERS: 127.0.0.1:9092
+          TEST_REDIS_ADDR: 127.0.0.1:6379
+          TEST_REDIS_DB: '15'
+          TEST_MINIO_ENDPOINT: 127.0.0.1:9000
+          TEST_MINIO_ACCESS_KEY: minioadmin
+          TEST_MINIO_SECRET_KEY: minioadmin
+          TEST_FFMPEG_PATH: ffmpeg
+          TEST_FFPROBE_PATH: ffprobe
+          REQUIRE_INTEGRATION_TESTS: 'true'
+        run: go test -race -tags integration ./... -count=1 -timeout=8m
+      - name: Stop dependencies
+        if: always()
+        run: docker compose --env-file .env -f deploy/docker-compose.yml down

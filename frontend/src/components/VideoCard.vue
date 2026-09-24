@@ -30,7 +30,8 @@ const destination = computed(() => ({
       <span class="video-card-stats">
         {{ video.stats?.view_count ?? 0 }} 播放 · {{ video.stats?.like_count ?? 0 }} 喜欢 · {{ video.stats?.comment_count ?? 0 }} 评论
       </span>
-      <span class="video-card-author">BY {{ author }}</span>
+      <RouterLink v-if="video.author?.id" class="video-card-author" :to="`/creator/${video.author.id}`" @click.stop>BY {{ author }}</RouterLink>
+      <span v-else class="video-card-author">BY {{ author }}</span>
     </span>
   </RouterLink>
 </template>

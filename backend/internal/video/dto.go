@@ -6,19 +6,23 @@ import (
 )
 
 type CreateRequest struct {
-	Title       string `json:"title" binding:"required"`
-	Description string `json:"description"`
-	FileName    string `json:"file_name" binding:"required"`
-	ContentType string `json:"content_type" binding:"required"`
-	FileSize    int64  `json:"file_size" binding:"required"`
+	Title       string   `json:"title" binding:"required"`
+	Description string   `json:"description"`
+	FileName    string   `json:"file_name" binding:"required"`
+	ContentType string   `json:"content_type" binding:"required"`
+	FileSize    int64    `json:"file_size" binding:"required"`
+	CategoryID  uint64   `json:"category_id"`
+	Tags        []string `json:"tags"`
 }
 
 // UpdateRequest is an author's partial update. Pointer fields distinguish a
 // field that was left out from one that was supplied with an empty value.
 type UpdateRequest struct {
-	Title       *string `json:"title"`
-	Description *string `json:"description"`
-	Visibility  *string `json:"visibility"`
+	Title       *string   `json:"title"`
+	Description *string   `json:"description"`
+	Visibility  *string   `json:"visibility"`
+	CategoryID  *uint64   `json:"category_id"`
+	Tags        *[]string `json:"tags"`
 }
 
 // VideoPatch carries only the validated fields an author chose to change.
@@ -26,6 +30,8 @@ type VideoPatch struct {
 	Title       *string
 	Description *string
 	Visibility  *Visibility
+	CategoryID  *uint64
+	Tags        *[]string
 }
 
 // Sort selects the public discovery ordering.
@@ -39,10 +45,12 @@ const (
 // ListQuery is the validated public discovery request. Query is already
 // trimmed and length-checked by the Service before it reaches the Repository.
 type ListQuery struct {
-	Page     int
-	PageSize int
-	Query    string
-	Sort     Sort
+	Page       int
+	PageSize   int
+	Query      string
+	Sort       Sort
+	CategoryID uint64
+	Tags       []string
 }
 
 type AuthorResponse struct {
@@ -56,6 +64,7 @@ type AuthorResponse struct {
 type VideoResponse struct {
 	ID          uint64          `json:"id"`
 	UserID      uint64          `json:"user_id"`
+	CategoryID  uint64          `json:"category_id"`
 	Title       string          `json:"title"`
 	Description string          `json:"description"`
 	Status      string          `json:"status"`
@@ -71,6 +80,8 @@ type VideoResponse struct {
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
 	Author      *AuthorResponse `json:"author,omitempty"`
+	Category    *CategoryInfo   `json:"category,omitempty"`
+	Tags        []TagInfo       `json:"tags,omitempty"`
 }
 
 type CreateResponse struct {
@@ -111,6 +122,7 @@ func toVideoResponse(v *Video) VideoResponse {
 	result := VideoResponse{
 		ID:          v.ID,
 		UserID:      v.UserID,
+		CategoryID:  v.CategoryID,
 		Title:       v.Title,
 		Description: v.Description,
 		Status:      v.Status.String(),
@@ -124,6 +136,8 @@ func toVideoResponse(v *Video) VideoResponse {
 		Stats:       v.Stats,
 		CreatedAt:   v.CreatedAt,
 		UpdatedAt:   v.UpdatedAt,
+		Category:    v.Category,
+		Tags:        v.Tags,
 	}
 	if v.CoverObjectKey != nil && *v.CoverObjectKey != "" {
 		coverURL := fmt.Sprintf("/api/v1/videos/%d/cover", v.ID)

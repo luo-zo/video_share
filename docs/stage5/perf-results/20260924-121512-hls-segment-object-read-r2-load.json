@@ -1,0 +1,156 @@
+{
+    "metrics": {
+        "http_req_failed": {
+            "passes": 0,
+            "fails": 816,
+            "thresholds": {
+                "rate==0": false
+            },
+            "value": 0
+        },
+        "http_req_tls_handshaking": {
+            "max": 0,
+            "p(90)": 0,
+            "p(95)": 0,
+            "p(99)": 0,
+            "avg": 0,
+            "min": 0,
+            "med": 0
+        },
+        "http_req_waiting": {
+            "p(90)": 3.0543465000000003,
+            "p(95)": 3.4329532499999997,
+            "p(99)": 3.9962399000000004,
+            "avg": 2.125213517156863,
+            "min": 0.779202,
+            "med": 2.0926185,
+            "max": 6.172248
+        },
+        "http_req_duration": {
+            "med": 2.349502,
+            "max": 7.368535,
+            "p(90)": 3.5373029999999996,
+            "p(95)": 3.879249,
+            "p(99)": 4.988184650000002,
+            "avg": 2.462943589460782,
+            "min": 0.980234
+        },
+        "http_req_receiving": {
+            "avg": 0.3116297450980391,
+            "min": 0.023315,
+            "med": 0.16437800000000002,
+            "max": 5.624078,
+            "p(90)": 0.6383215,
+            "p(95)": 1.0367757499999999,
+            "p(99)": 2.2488165000000038
+        },
+        "vus": {
+            "max": 3,
+            "value": 3,
+            "min": 3
+        },
+        "data_sent": {
+            "count": 252144,
+            "rate": 16713.38978286433
+        },
+        "data_received": {
+            "count": 99663384,
+            "rate": 6606197.188397441
+        },
+        "http_reqs": {
+            "count": 816,
+            "rate": 54.0886400739946
+        },
+        "iteration_duration": {
+            "min": 107.482454,
+            "med": 110.83592250000001,
+            "max": 117.144502,
+            "p(90)": 113.3427863,
+            "p(95)": 114.1594973,
+            "p(99)": 115.33525453,
+            "avg": 110.90815757352942
+        },
+        "http_req_connecting": {
+            "med": 0,
+            "max": 0.410666,
+            "p(90)": 0,
+            "p(95)": 0,
+            "p(99)": 0,
+            "avg": 0.0022803149509803924,
+            "min": 0
+        },
+        "http_req_sending": {
+            "avg": 0.026100327205882356,
+            "min": 0.006583,
+            "med": 0.0164115,
+            "max": 0.473149,
+            "p(90)": 0.0476765,
+            "p(95)": 0.06695,
+            "p(99)": 0.17096040000000004
+        },
+        "vus_max": {
+            "value": 3,
+            "min": 3,
+            "max": 3
+        },
+        "checks": {
+            "passes": 1224,
+            "fails": 0,
+            "thresholds": {
+                "rate==1": false
+            },
+            "value": 1
+        },
+        "http_req_blocked": {
+            "p(90)": 0.010485,
+            "p(95)": 0.013295999999999999,
+            "p(99)": 0.05424195000000007,
+            "avg": 0.009839743872549017,
+            "min": 0.002174,
+            "med": 0.005636,
+            "max": 0.584284
+        },
+        "http_req_duration{expected_response:true}": {
+            "p(95)": 3.879249,
+            "p(99)": 4.988184650000002,
+            "avg": 2.462943589460782,
+            "min": 0.980234,
+            "med": 2.349502,
+            "max": 7.368535,
+            "p(90)": 3.5373029999999996
+        },
+        "iterations": {
+            "count": 408,
+            "rate": 27.0443200369973
+        }
+    },
+    "root_group": {
+        "name": "",
+        "path": "",
+        "id": "d41d8cd98f00b204e9800998ecf8427e",
+        "groups": {},
+        "checks": {
+                "HLS segment returns HTTP 200": {
+                    "passes": 408,
+                    "fails": 0,
+                    "name": "HLS segment returns HTTP 200",
+                    "path": "::HLS segment returns HTTP 200",
+                    "id": "cdbd164738ecbe146037359efb25b2d3"
+                },
+                "HLS response is MPEG-TS": {
+                    "name": "HLS response is MPEG-TS",
+                    "path": "::HLS response is MPEG-TS",
+                    "id": "f4d5e99f4ece51293ca4a9c55f70759d",
+                    "passes": 408,
+                    "fails": 0
+                },
+                "HLS segment body is non-empty": {
+                    "name": "HLS segment body is non-empty",
+                    "path": "::HLS segment body is non-empty",
+                    "id": "dc5cef90bbaf30a332fab396032e6256",
+                    "passes": 408,
+                    "fails": 0
+                }
+            }
+    }
+}

@@ -31,6 +31,21 @@ func TestGenerateAndParse(t *testing.T) {
 	}
 }
 
+func TestGenerateWithSessionCarriesSID(t *testing.T) {
+	m := NewManager("secret", "video-share", time.Hour)
+	signed, _, err := m.GenerateWithSession(42, "family-123")
+	if err != nil {
+		t.Fatalf("GenerateWithSession: %v", err)
+	}
+	claims, err := m.Parse(signed)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if claims.UserID != 42 || claims.SessionID != "family-123" {
+		t.Fatalf("claims = %+v, want uid=42 sid=family-123", claims)
+	}
+}
+
 func TestParseRejectsExpiredToken(t *testing.T) {
 	m := NewManager("test-secret", "video-share", time.Hour)
 	m.now = func() time.Time { return time.Now().Add(-2 * time.Hour) }

@@ -1,0 +1,4 @@
+﻿"timestamp","endpoint","cache_mode","profile","repeat","vus","duration","redis_hits_delta","redis_misses_delta","mysql_questions_delta","docker_cpu_avg_pct","docker_cpu_peak_pct","api_mem_peak_mib","mysql_mem_peak_mib","redis_mem_peak_mib","k6_summary","docker_stats"
+"2026-09-24T11:39:41.3669135+08:00","categories","cold","cold","1","1","1 iteration","0","1",,"2.043","7.42","11.18","385.4","3.992","20260924-113934-categories-cold-r1-cold.json","20260924-113934-categories-cold-r1-cold.stats.txt"
+"2026-09-24T11:39:48.0820470+08:00","ranking","cold","cold","1","1","1 iteration","0","1",,"1.297","5.62","11.3","385.6","4.184","20260924-113934-ranking-cold-r1-cold.json","20260924-113934-ranking-cold-r1-cold.stats.txt"
+"2026-09-24T11:39:54.1353801+08:00","engagement","mysql-read","cold","1","1","1 iteration","0","0",,"1.16","5.27","11.28","385.4","4.156","20260924-113934-engagement-mysql-read-r1-cold.json","20260924-113934-engagement-mysql-read-r1-cold.stats.txt"

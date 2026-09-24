@@ -12,6 +12,7 @@ func TestCommunityMigrationsEmbedded(t *testing.T) {
 	for _, name := range []string{
 		"000004_add_community_schema.sql",
 		"000005_backfill_community_data.sql",
+		"000006_sessions_profiles.sql",
 	} {
 		if _, err := migrations.FS.ReadFile(name); err != nil {
 			t.Errorf("migration %s is not embedded: %v", name, err)

@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"video_share/internal/middleware"
+	"video_share/internal/notification"
 	"video_share/internal/response"
 	"video_share/internal/video"
 )
@@ -61,6 +62,12 @@ func (h *Handler) handleError(c *gin.Context, operation string, err error) {
 		response.Error(c, http.StatusNotFound, response.CodeNotFound, "评论不存在")
 	case errors.Is(err, ErrCommentForbidden):
 		response.Error(c, http.StatusForbidden, response.CodeCommentForbidden, "只能删除自己的评论")
+	case errors.Is(err, ErrParentCommentInvalid):
+		response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "回复目标无效或已删除")
+	case errors.Is(err, ErrIdempotencyConflict):
+		response.Error(c, http.StatusConflict, response.CodeIdempotencyConflict, "相同 request_id 的请求内容不一致")
+	case errors.Is(err, notification.ErrInvalidRequestID):
+		response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "request_id 无效")
 	case errors.Is(err, ErrContentInvalid):
 		response.Error(c, http.StatusBadRequest, response.CodeInvalidParameter, "评论内容需为 1-500 个字符")
 	case errors.Is(err, ErrProgressInvalid):
@@ -87,12 +94,29 @@ func (h *Handler) CreateComment(c *gin.Context) {
 	if !h.bindJSON(c, &req) {
 		return
 	}
-	result, err := h.svc.CreateComment(c.Request.Context(), userID, id, req.Content)
+	result, err := h.svc.CreateCommentWithRequest(c.Request.Context(), userID, id, req.Content, req.ParentID, req.RequestID)
 	if err != nil {
 		h.handleError(c, "create comment", err)
 		return
 	}
 	response.OK(c, http.StatusCreated, result)
+}
+
+func (h *Handler) ListReplies(c *gin.Context) {
+	id, ok := commentIDParam(c)
+	if !ok {
+		return
+	}
+	page, pageSize, ok := pagination(c)
+	if !ok {
+		return
+	}
+	result, err := h.svc.ListReplies(c.Request.Context(), id, page, pageSize)
+	if err != nil {
+		h.handleError(c, "list comment replies", err)
+		return
+	}
+	response.OK(c, http.StatusOK, result)
 }
 
 func (h *Handler) ListComments(c *gin.Context) {

@@ -8,6 +8,7 @@ import UploadView from '../../src/views/UploadView.vue';
 
 vi.mock('../../src/api', () => ({
   videoClient: { uploadVideo: vi.fn(), waitUntilProcessed: vi.fn() },
+  taxonomyClient: { listCategories: vi.fn().mockResolvedValue({ items: [] }) },
 }));
 
 function file(): File {

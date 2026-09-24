@@ -18,11 +18,13 @@ func TestCommunitySchemaConstraintsAndBackfill(t *testing.T) {
 	if _, err := migrator.Up(ctx); err != nil {
 		t.Fatalf("initial migrate up: %v", err)
 	}
-	if _, err := migrator.Down(ctx); err != nil {
-		t.Fatalf("roll back data migration: %v", err)
-	}
-	if _, err := migrator.Down(ctx); err != nil {
-		t.Fatalf("roll back schema migration: %v", err)
+	// Stage5 now has migrations 000006–000010. Roll them back as well as the
+	// original community/data migrations, but leave 000003 in place because the
+	// partial 000004 simulation references its processed_at column.
+	for i := 0; i < 7; i++ {
+		if _, err := migrator.Down(ctx); err != nil {
+			t.Fatalf("roll back migration %d: %v", i+1, err)
+		}
 	}
 
 	// Simulate a connection loss after MySQL has committed the first ALTER but
@@ -80,13 +82,95 @@ func TestCommunitySchemaConstraintsAndBackfill(t *testing.T) {
 		t.Fatal("progress greater than a known duration succeeded")
 	}
 
-	if _, err := migrator.Down(ctx); err != nil {
-		t.Fatalf("down data migration: %v", err)
-	}
-	if _, err := migrator.Down(ctx); err != nil {
-		t.Fatalf("down schema migration: %v", err)
+	for i := 0; i < 7; i++ {
+		if _, err := migrator.Down(ctx); err != nil {
+			t.Fatalf("down migration %d: %v", i+1, err)
+		}
 	}
 	assertSchemaColumnCount(t, db, "videos", []string{"visibility", "published_at"}, 0)
+}
+
+func TestSessionMigrationRecoversPartiallyAppliedUserAlter(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	migrator, err := NewMigrator(db)
+	if err != nil {
+		t.Fatalf("NewMigrator: %v", err)
+	}
+	if _, err := migrator.Up(ctx); err != nil {
+		t.Fatalf("initial migrate up: %v", err)
+	}
+	// Leave migration 000006 pending while simulating a connection loss after
+	// MySQL committed only its first additive ALTER statement.
+	for i := 0; i < 5; i++ {
+		if _, err := migrator.Down(ctx); err != nil {
+			t.Fatalf("roll back stage5 migration %d: %v", i+1, err)
+		}
+	}
+	mustExec(t, db, "ALTER TABLE users ADD COLUMN bio VARCHAR(200) NOT NULL DEFAULT '' AFTER nickname")
+	if _, err := migrator.Up(ctx); err != nil {
+		t.Fatalf("recover sessions migration: %v", err)
+	}
+	assertSchemaColumnCount(t, db, "users", []string{"bio", "role"}, 2)
+	var constraintCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.table_constraints
+		WHERE table_schema = DATABASE() AND table_name = 'users' AND constraint_name = 'chk_users_role'`).Scan(&constraintCount); err != nil {
+		t.Fatalf("query role constraint: %v", err)
+	}
+	if constraintCount != 1 {
+		t.Fatalf("role constraint count=%d, want 1", constraintCount)
+	}
+}
+
+func TestModerationMigrationRecoversPartiallyAppliedAdditiveDDL(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	migrator, err := NewMigrator(db)
+	if err != nil {
+		t.Fatalf("NewMigrator: %v", err)
+	}
+	if _, err := migrator.Up(ctx); err != nil {
+		t.Fatalf("initial migrate up: %v", err)
+	}
+	// Roll back 000010 and 000009, then simulate a connection loss after its first
+	// ALTER committed but before the remaining statements and Goose version
+	// record were written.
+	for i := 0; i < 2; i++ {
+		if _, err := migrator.Down(ctx); err != nil {
+			t.Fatalf("roll back moderation migration: %v", err)
+		}
+	}
+	mustExec(t, db, "ALTER TABLE videos ADD COLUMN moderation_status VARCHAR(16) NOT NULL DEFAULT 'visible' AFTER visibility")
+	if _, err := migrator.Up(ctx); err != nil {
+		t.Fatalf("recover moderation migration: %v", err)
+	}
+	assertSchemaColumnCount(t, db, "videos", []string{"moderation_status", "visibility"}, 2)
+	assertSchemaColumnCount(t, db, "comments", []string{"moderation_status", "deleted_at"}, 2)
+	assertTableExists(t, db, "reports")
+	assertTableExists(t, db, "moderation_actions")
+}
+
+func TestMetricsMigrationRecoversPartiallyAppliedWatchHistoryAlter(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	migrator, err := NewMigrator(db)
+	if err != nil {
+		t.Fatalf("NewMigrator: %v", err)
+	}
+	if _, err := migrator.Up(ctx); err != nil {
+		t.Fatalf("initial migrate up: %v", err)
+	}
+	if _, err := migrator.Down(ctx); err != nil {
+		t.Fatalf("roll back metrics migration: %v", err)
+	}
+	mustExec(t, db, "ALTER TABLE watch_histories ADD COLUMN effective_watch_ms BIGINT UNSIGNED NOT NULL DEFAULT 0 AFTER duration_ms")
+	if _, err := migrator.Up(ctx); err != nil {
+		t.Fatalf("recover metrics migration: %v", err)
+	}
+	assertSchemaColumnCount(t, db, "watch_histories", []string{"effective_watch_ms", "last_watch_credit_at"}, 2)
+	assertTableExists(t, db, "watch_sessions")
+	assertTableExists(t, db, "video_daily_metrics")
+	assertTableExists(t, db, "creator_daily_metrics")
 }
 
 func mustExec(t *testing.T, db *sql.DB, statement string) {

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 
@@ -49,6 +50,15 @@ func tokenFor(t *testing.T, tm *token.Manager, userID uint64) string {
 	value, _, err := tm.Generate(userID)
 	if err != nil {
 		t.Fatalf("generate token: %v", err)
+	}
+	return value
+}
+
+func tokenForSession(t *testing.T, tm *token.Manager, userID uint64, familyID string) string {
+	t.Helper()
+	value, _, err := tm.GenerateWithSession(userID, familyID)
+	if err != nil {
+		t.Fatalf("generate session token: %v", err)
 	}
 	return value
 }
@@ -97,7 +107,7 @@ func TestRouterValidatesTokenSubjectAndLimitsWatchBody(t *testing.T) {
 
 	tm := token.NewManager("test-secret", "video-share", time.Hour)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	router := NewRouter(&config.Config{}, db, log, tm, nil)
+	router := NewRouter(&config.Config{}, db, log, tm, nil, nil)
 	disabledToken := tokenFor(t, tm, ids["disabled_user"])
 	missingToken := tokenFor(t, tm, 999999)
 
@@ -146,12 +156,100 @@ func TestRouterValidatesTokenSubjectAndLimitsWatchBody(t *testing.T) {
 		}
 	}
 
-	normalToken := tokenFor(t, tm, ids["normal_user"])
+	familyID := uuid.NewString()
+	if err := db.Exec(`INSERT INTO session_families (id, user_id, created_at, absolute_expires_at)
+		VALUES (?, ?, UTC_TIMESTAMP(3), DATE_ADD(UTC_TIMESTAMP(3), INTERVAL 30 DAY))`, familyID, ids["normal_user"]).Error; err != nil {
+		t.Fatalf("seed session family: %v", err)
+	}
+	normalToken := tokenForSession(t, tm, ids["normal_user"], familyID)
 	oversized := `{"padding":"` + strings.Repeat("x", 40*1024) + `","progress_ms":1}`
 	request := authenticatedRequest(http.MethodPost, "/api/v1/videos/"+strconv.FormatUint(videoID, 10)+"/watch", normalToken, oversized)
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusRequestEntityTooLarge || !strings.Contains(response.Body.String(), `"code":"REQUEST_TOO_LARGE"`) {
 		t.Fatalf("oversized watch = %d %s, want 413 REQUEST_TOO_LARGE", response.Code, response.Body.String())
+	}
+}
+
+func TestLogoutRevokesValidAccessFamilyWithoutRefreshCookie(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openRouterTestDB(t)
+	if err := db.Exec(`INSERT INTO users (username, password_hash, nickname, status) VALUES ('logout_user', 'hash', 'logout', 1)`).Error; err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	var userID uint64
+	if err := db.Raw("SELECT id FROM users WHERE username = 'logout_user'").Scan(&userID).Error; err != nil || userID == 0 {
+		t.Fatalf("read user id: %d %v", userID, err)
+	}
+	familyID := uuid.NewString()
+	if err := db.Exec(`INSERT INTO session_families (id, user_id, created_at, absolute_expires_at)
+		VALUES (?, ?, UTC_TIMESTAMP(3), DATE_ADD(UTC_TIMESTAMP(3), INTERVAL 30 DAY))`, familyID, userID).Error; err != nil {
+		t.Fatalf("seed session family: %v", err)
+	}
+	tm := token.NewManager("test-secret", "video-share", time.Hour)
+	router := NewRouter(&config.Config{}, db, slog.New(slog.NewTextHandler(io.Discard, nil)), tm, nil, nil)
+	access := tokenForSession(t, tm, userID, familyID)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", strings.NewReader(`{}`))
+	request.Header.Set("Authorization", "Bearer "+access)
+	request.Header.Set("Origin", "http://127.0.0.1:5173")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Cookie", "video_share_csrf=csrf")
+	request.Header.Set("X-CSRF-Token", "csrf")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("logout status = %d, body=%s", response.Code, response.Body.String())
+	}
+
+	protected := httptest.NewRecorder()
+	profile := authenticatedRequest(http.MethodGet, "/api/v1/users/me", access, "")
+	router.ServeHTTP(protected, profile)
+	if protected.Code != http.StatusUnauthorized {
+		t.Fatalf("old access token after logout = %d, body=%s", protected.Code, protected.Body.String())
+	}
+}
+
+func TestReportRouteFallsBackToPerUserRateLimitWhenRedisIsUnavailable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openRouterTestDB(t)
+	if err := db.Exec(`INSERT INTO users (username, password_hash, nickname, status) VALUES ('report_limiter', 'hash', '举报测试', 1)`).Error; err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	var userID uint64
+	if err := db.Raw("SELECT id FROM users WHERE username = 'report_limiter'").Scan(&userID).Error; err != nil || userID == 0 {
+		t.Fatalf("read user id: %d %v", userID, err)
+	}
+	if err := db.Exec(`INSERT INTO videos (user_id, title, description, object_key, status, visibility, file_size, content_type)
+		VALUES (?, '举报目标', '', 'reports/limiter.mp4', 2, 1, 1, 'video/mp4')`, userID).Error; err != nil {
+		t.Fatalf("seed video: %v", err)
+	}
+	var videoID uint64
+	if err := db.Raw("SELECT id FROM videos WHERE object_key = 'reports/limiter.mp4'").Scan(&videoID).Error; err != nil || videoID == 0 {
+		t.Fatalf("read video id: %d %v", videoID, err)
+	}
+	familyID := uuid.NewString()
+	if err := db.Exec(`INSERT INTO session_families (id, user_id, created_at, absolute_expires_at)
+		VALUES (?, ?, UTC_TIMESTAMP(3), DATE_ADD(UTC_TIMESTAMP(3), INTERVAL 1 DAY))`, familyID, userID).Error; err != nil {
+		t.Fatalf("seed session family: %v", err)
+	}
+	tm := token.NewManager("test-secret", "video-share", time.Hour)
+	router := NewRouter(&config.Config{AppOrigin: "http://127.0.0.1:5173", ReportRateLimit: 1, ReportRateWindow: time.Minute}, db, slog.New(slog.NewTextHandler(io.Discard, nil)), tm, nil, nil)
+	access := tokenForSession(t, tm, userID, familyID)
+	requestReport := func(requestID string) *httptest.ResponseRecorder {
+		request := authenticatedRequest(http.MethodPost, "/api/v1/reports", access, `{"target_type":"video","target_id":`+strconv.FormatUint(videoID, 10)+`,"reason_code":"spam","detail":"重复内容","request_id":"`+requestID+`"}`)
+		request.Header.Set("Origin", "http://127.0.0.1:5173")
+		request.Header.Set("Cookie", "video_share_csrf=csrf")
+		request.Header.Set("X-CSRF-Token", "csrf")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+	first := requestReport("report-limit-1")
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first report = %d %s, want 201", first.Code, first.Body.String())
+	}
+	second := requestReport("report-limit-2")
+	if second.Code != http.StatusTooManyRequests || !strings.Contains(second.Body.String(), `"code":"RATE_LIMITED"`) {
+		t.Fatalf("second report = %d %s, want 429 RATE_LIMITED", second.Code, second.Body.String())
 	}
 }

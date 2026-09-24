@@ -13,6 +13,9 @@ import (
 func TestKafkaPing(t *testing.T) {
 	raw := strings.TrimSpace(os.Getenv("TEST_KAFKA_BROKERS"))
 	if raw == "" {
+		if strings.EqualFold(strings.TrimSpace(os.Getenv("REQUIRE_INTEGRATION_TESTS")), "true") {
+			t.Fatal("TEST_KAFKA_BROKERS must be set when REQUIRE_INTEGRATION_TESTS=true")
+		}
 		t.Skip("TEST_KAFKA_BROKERS not set; skipping Kafka integration test")
 	}
 	client, err := NewKafkaPublisher(strings.Split(raw, ","), "video-share-integration-test")

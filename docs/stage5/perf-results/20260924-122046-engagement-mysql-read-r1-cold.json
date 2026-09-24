@@ -1,0 +1,158 @@
+{
+    "metrics": {
+        "http_reqs": {
+            "count": 2,
+            "rate": 16.81746848614522
+        },
+        "checks": {
+            "passes": 3,
+            "fails": 0,
+            "thresholds": {
+                "rate==1": false
+            },
+            "value": 1
+        },
+        "http_req_tls_handshaking": {
+            "p(99)": 0,
+            "avg": 0,
+            "min": 0,
+            "med": 0,
+            "max": 0,
+            "p(90)": 0,
+            "p(95)": 0
+        },
+        "data_received": {
+            "count": 482,
+            "rate": 4053.0099051609977
+        },
+        "http_req_sending": {
+            "p(95)": 0.7259218,
+            "p(99)": 0.7544555599999999,
+            "avg": 0.40491699999999997,
+            "min": 0.048245,
+            "med": 0.40491699999999997,
+            "max": 0.761589,
+            "p(90)": 0.6902545999999999
+        },
+        "http_req_receiving": {
+            "min": 0.152858,
+            "med": 0.162247,
+            "max": 0.171636,
+            "p(90)": 0.1697582,
+            "p(95)": 0.17069710000000002,
+            "p(99)": 0.17144822,
+            "avg": 0.162247
+        },
+        "http_req_duration": {
+            "max": 6.014128,
+            "p(90)": 5.7603768,
+            "p(95)": 5.8872524,
+            "p(99)": 5.98875288,
+            "avg": 4.745372,
+            "min": 3.476616,
+            "med": 4.745372
+        },
+        "http_req_failed": {
+            "passes": 0,
+            "fails": 2,
+            "thresholds": {
+                "rate==0": false
+            },
+            "value": 0
+        },
+        "http_req_duration{expected_response:true}": {
+            "avg": 4.745372,
+            "min": 3.476616,
+            "med": 4.745372,
+            "max": 6.014128,
+            "p(90)": 5.7603768,
+            "p(95)": 5.8872524,
+            "p(99)": 5.98875288
+        },
+        "http_req_waiting": {
+            "p(99)": 5.76192622,
+            "avg": 4.178208,
+            "min": 2.562169,
+            "med": 4.178208,
+            "max": 5.794247,
+            "p(90)": 5.4710392,
+            "p(95)": 5.6326431
+        },
+        "iterations": {
+            "count": 1,
+            "rate": 8.40873424307261
+        },
+        "http_req_blocked": {
+            "min": 2.382913,
+            "med": 3.7828150000000003,
+            "max": 5.182717,
+            "p(90)": 4.902736600000001,
+            "p(95)": 5.0427268000000005,
+            "p(99)": 5.15471896,
+            "avg": 3.7828150000000003
+        },
+        "http_req_connecting": {
+            "avg": 2.2173685,
+            "min": 2.211044,
+            "med": 2.2173685,
+            "max": 2.223693,
+            "p(90)": 2.2224281,
+            "p(95)": 2.22306055,
+            "p(99)": 2.22356651
+        },
+        "data_sent": {
+            "count": 376,
+            "rate": 3161.684075395301
+        },
+        "iteration_duration": {
+            "med": 108.831463,
+            "max": 108.831463,
+            "p(90)": 108.831463,
+            "p(95)": 108.831463,
+            "p(99)": 108.831463,
+            "avg": 108.831463,
+            "min": 108.831463
+        }
+    },
+    "setup_data": {
+        "videoID": 19
+    },
+    "root_group": {
+        "name": "",
+        "path": "",
+        "id": "d41d8cd98f00b204e9800998ecf8427e",
+        "groups": {
+            "setup": {
+                "id": "5c0f8025f7e0b6654089e5b00e950f1a",
+                "groups": {},
+                "checks": {
+                        "anonymous comment creation is rejected": {
+                            "passes": 1,
+                            "fails": 0,
+                            "name": "anonymous comment creation is rejected",
+                            "path": "::setup::anonymous comment creation is rejected",
+                            "id": "9bcf5525504fd93bf9240e11fac6a1dd"
+                        }
+                    },
+                "name": "setup",
+                "path": "::setup"
+            }
+        },
+        "checks": {
+            "comments returns HTTP 200": {
+                "passes": 1,
+                "fails": 0,
+                "name": "comments returns HTTP 200",
+                "path": "::comments returns HTTP 200",
+                "id": "d4f9066cd81d8a057b8967522efabebd"
+            },
+            "comments envelope is structurally valid": {
+                "path": "::comments envelope is structurally valid",
+                "id": "649b04db5cbd8e51afbf7ad9be1616ee",
+                "passes": 1,
+                "fails": 0,
+                "name": "comments envelope is structurally valid"
+            }
+        }
+    }
+}

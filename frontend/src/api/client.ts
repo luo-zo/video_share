@@ -71,6 +71,9 @@ export function responseError(status: number, detail: ErrorDetail = {}): AuthErr
   else if (code === 'UPLOAD_INCOMPLETE') message = '视频文件尚未上传完成，请稍后重试。';
   else if (code === 'UPLOAD_MISMATCH') message = '上传文件与投稿信息不一致，请重新投稿。';
   else if (code === 'VIDEO_STATE_CONFLICT') message = '当前视频状态不能执行这个操作。';
+  else if (code === 'REFRESH_CONFLICT') message = '登录刷新正在其他标签页进行，请稍后重试。';
+  else if (code === 'SESSION_REUSED' || code === 'SESSION_EXPIRED') message = '登录状态已失效，请重新登录。';
+  else if (code === 'CSRF_FAILED') message = '请求安全校验失败，请刷新页面后重试。';
   else if (code === 'INVALID_PARAMETER') message = '输入信息不符合要求，请检查后重试。';
   else if (status >= 500) message = '服务暂时不可用，请稍后重试。';
   return new AuthError(message, {
@@ -99,6 +102,9 @@ export interface RequestOptions {
   token?: string;
   keepalive?: boolean;
   signal?: AbortSignal;
+  withCredentials?: boolean;
+  csrf?: boolean;
+  headers?: Readonly<Record<string, string>>;
 }
 
 export type Requester = (path: string, options?: RequestOptions) => Promise<unknown>;
@@ -114,7 +120,7 @@ export function createRequester({
 }: RequesterOptions = {}): Requester {
   return async function request(
     path: string,
-    { method = 'GET', body, token, keepalive = false, signal }: RequestOptions = {},
+    { method = 'GET', body, token, keepalive = false, signal, withCredentials = false, csrf = false, headers: extraHeaders }: RequestOptions = {},
   ): Promise<unknown> {
     const controller = new AbortController();
     let timedOut = false;
@@ -128,16 +134,23 @@ export function createRequester({
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (token) headers.Authorization = `Bearer ${token}`;
+    if (csrf) {
+      const cookie = typeof document === 'undefined' ? '' : document.cookie.split('; ').find((item) => item.startsWith('video_share_csrf='));
+      const value = cookie?.slice('video_share_csrf='.length) ?? '';
+      if (value) headers['X-CSRF-Token'] = decodeURIComponent(value);
+    }
+    if (extraHeaders) Object.assign(headers, extraHeaders);
     try {
       const response = await fetchImpl(`${API_ROOT}${path}`, {
         method,
         headers,
-        credentials: 'omit',
+        credentials: withCredentials ? 'include' : 'omit',
         cache: 'no-store',
         signal: controller.signal,
         keepalive: Boolean(keepalive),
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
+      if (response.status === 204) return undefined;
       let payload: unknown;
       try {
         payload = await response.json();

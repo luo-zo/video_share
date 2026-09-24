@@ -105,6 +105,6 @@ onMounted(() => void nextTick(() => heading.value?.focus()));
       <p class="form-message" :class="{ 'is-error': Boolean(message) && Object.keys(errors).length > 0 }" aria-live="polite">{{ message }}</p>
     </form>
     <p class="switch-prompt">{{ mode === 'login' ? '第一次来这里？' : '已经有账号？' }}<button class="text-button" type="button" @click="switchMode">{{ mode === 'login' ? '创建账号' : '返回登录' }} →</button></p>
-    <p class="form-footnote">🔒 登录令牌只保存在当前页面，刷新后需重新登录</p>
+    <p class="form-footnote">🔒 访问令牌仅保存在内存，刷新后会用安全 Cookie 恢复登录</p>
   </div>
 </template>
